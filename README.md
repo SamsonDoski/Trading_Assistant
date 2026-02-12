@@ -1,6 +1,5 @@
 # Trading_Assistant
-This trading assistant tests and compares moving average crossover strategies across multiple tickers, ranking them by risk‑adjusted performance. It identifies the best MA pair for each stock, simulates weighted portfolios, and guides capital allocation—helping traders build profitable, resilient systems ready for real‑world deployment.
-Perfect — here’s a **polished, professional GitHub README** draft for your trading assistant, using the technical terms we’ve been working with and explaining exactly what each file/folder does so anyone landing on your repo instantly understands it.  
+This trading assistant tests and compares moving average crossover strategies across multiple tickers, ranking them by risk‑adjusted performance. It identifies the best MA pair for each stock, simulates weighted portfolios, and guides capital allocation—helping traders build profitable, resilient systems ready for real‑world deployment. 
 
 ---
 

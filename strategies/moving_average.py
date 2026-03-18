@@ -13,3 +13,4 @@ def apply_moving_average_strategy(df, short_window=50, long_window=200):
     df.loc[df["MA_short"] < df["MA_long"], "Signal"] = -1 #Sell
     
     return df
+# test

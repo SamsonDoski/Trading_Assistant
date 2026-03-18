@@ -31,3 +31,4 @@ def fetch_data(ticker, start="2020-01-01", end="2025-09-10"):
         return pd.read_csv(filename, index_col=0, parse_dates=True, date_format="%Y-%m-%d")
 
    # print(f"Fetched {len(data)} rows. Last date: {data.index[-1].date()}")
+

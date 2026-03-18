@@ -10,11 +10,11 @@ def plot_ma_signals(df, ticker):
     plt.plot(df.index, df['MA_long'], label='Long MA', color='red', linestyle='-')
 
     # Buy Signals
-    plt.scatter(df.index[df['Signal'] == 1], df['Close'][df['Signal'] == 1], label ='Buy'\
+    plt.scatter(df.index[df['signal'] == 1], df['Close'][df['signal'] == 1], label ='Buy'\
                 , marker='^', color="green", s=100)
 
     # Sell Signals
-    plt.scatter(df.index[df['Signal'] == -1], df['Close'][df['Signal'] == -1], label ='Sell'\
+    plt.scatter(df.index[df['signal'] == -1], df['Close'][df['signal'] == -1], label ='Sell'\
                 , marker='v', color="red", s=100)
 
 

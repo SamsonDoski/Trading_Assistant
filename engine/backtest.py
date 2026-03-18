@@ -8,7 +8,7 @@ class BacktestEngine:
 
     def run(self, df):
         df = df.copy()
-        df["Position"] = df["Signal"].shift(1).fillna(0)  # Enter after signal
+        df["Position"] = df["signal"].shift(1).fillna(0)  # Enter after signal
         df["Returns"] = df["Close"].pct_change().fillna(0)
         df["Strategy_Returns"] = df["Returns"] * df["Position"]
         df["Equity"] = (1 + df["Strategy_Returns"]).cumprod() * self.initial_equity

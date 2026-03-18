@@ -9,7 +9,7 @@ def apply_moving_average_strategy(df, short_window=50, long_window=200):
     # create column 'signal'
     df["signal"] = 0
     # loc[row,column] pandas function
-    df.loc[df["MA_short"] > df["MA_long"], "signal"] = 1 #Buy
-    df.loc[df["MA_short"] < df["MA_long"], "signal"] = -1 #Sell
+    df.loc[df["MA_short"] > df["MA_long"], "Signal"] = 1 #Buy
+    df.loc[df["MA_short"] < df["MA_long"], "Signal"] = -1 #Sell
     
     return df

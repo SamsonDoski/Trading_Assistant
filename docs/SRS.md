@@ -1,0 +1,23 @@
+# Software Requirements Specification (SRS)
+
+**Project:** Trading_Assistant v2.0  
+**Objective:** Evolve the system from a historical backtester to a predictive, profile-driven trading assistant with strict risk management.
+
+---
+
+## 1. Functional Requirements
+
+| Phase | Feature | Requirement Description |
+| :--- | :--- | :--- |
+| **Phase 1** | **Capital Preservation (Stop-Loss)** | The system **must** track the purchase price of an active trade. If the current price drops a specified percentage below the purchase price, the system **must** immediately generate a `-1` (Sell) signal, overriding all other indicators. |
+| **Phase 2** | **Trader Profiles (Config)** | The system **must** read strategy parameters (e.g., timeframes, MA windows, Stop-Loss percentages) from a centralized configuration file. It **must** allow the user to select predefined profiles (e.g., "Day_Trader", "Swing_Trader") that automatically apply these settings. |
+| **Phase 3** | **Predictive Engine (RSI)** | The strategy module **must** calculate the Relative Strength Index (RSI). The buy logic **must** require both a moving average trend confirmation AND an RSI oversold confirmation (e.g., RSI < 30) before outputting a `1` (Buy) signal. |
+| **Phase 4** | **Live Execution (Alerts)** | The `main.py` script **must** isolate the most recent data row. It **must** output a formatted terminal alert detailing the current ticker, recommended action (Buy/Sell/Hold), current price, and active stop-loss target. |
+
+---
+
+## 2. Non-Functional Requirements
+
+* **Performance (Speed):** All mathematical strategy calculations must utilize Pandas vectorization to ensure the backtest engine runs in under 5 seconds per ticker.
+* **Modularity:** Strategy logic (e.g., Moving Averages, RSI) must remain separated from the backtest engine and data loader, ensuring new strategies can be plugged in without rewriting core system files.
+* **Usability:** Live terminal alerts must be highly visible and easily readable by a non-technical trader.

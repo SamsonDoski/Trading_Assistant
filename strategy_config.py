@@ -30,4 +30,4 @@ PROFILES = {
 
 def get_profile(profile_name):
     '''Returns the strategy parameters for the given trade profile.'''
-    return PROFILES.get(profile_name, PROFILES["Swing"])  # Default to "Swing" if profile not found
+    return PROFILES.get(profile_name, PROFILES["Swing"])  # Default  to "Swing" if profile not found

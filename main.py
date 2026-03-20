@@ -5,10 +5,12 @@ from utils.data_loader import fetch_data
 from strategies.moving_average import apply_moving_average_strategy
 from utils.visualize1 import plot_ma_signals as plot
 from engine.backtest import BacktestEngine
+from strategy_config import get_profile
 
 def main():
     # CLI argument parser
     parser = argparse.ArgumentParser(description="Risk-Adjusted MA Strategy Backtester")
+    parser.add_argument("--profile", type=str, default="Swing", help="Trade profile to use (Aggressive, Swing, Long-Term, Volatile)")
     parser.add_argument("--ticker", type=str, default=config.DEFAULT_TICKER, help="Stock ticker symbol")
     parser.add_argument("--start", type=str, default=config.START_DATE, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, default=config.END_DATE, help="End date (YYYY-MM-DD)")
@@ -24,7 +26,16 @@ def main():
         return
 
     # Apply strategy
-    df = apply_moving_average_strategy(df, short_window=config.SHORT_MA, long_window=config.LONG_MA)
+    # Fetch the correct settings based on the CLI input
+    profile_settings = get_profile(args.profile)
+    
+    # Pass those dynamic settings into our strategy
+    df = apply_moving_average_strategy(
+        df, 
+        short_window=profile_settings["short_window"], 
+        long_window=profile_settings["long_window"], 
+        stop_loss_pct=profile_settings["stop_loss_pct"]
+    )
 
     # Run backtest
     engine = BacktestEngine(initial_equity=args.equity)

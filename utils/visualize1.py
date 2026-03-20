@@ -14,7 +14,7 @@ def plot_ma_signals(df, ticker):
                 , marker='^', color="green", s=100)
 
     # Sell Signals
-    plt.scatter(df.index[df['Signal'] == -1], df['Close'][df['Signal'] == -1], label ='Sell'\
+    plt.scatter(df.index[df['Signal'] == 0], df['Close'][df['Signal'] == 0], label ='Sell'\
                 , marker='v', color="red", s=100)
 
 

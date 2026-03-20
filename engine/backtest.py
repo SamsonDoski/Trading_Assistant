@@ -15,11 +15,17 @@ class BacktestEngine:
         return df
 
     def summary(self, df):
-        total_return = df["Equity"].iloc[-1] / self.initial_equity - 1
+        final_equity = df["Equity"].iloc[-1]
+        net_profit = final_equity - self.initial_equity
+        
+        total_return = final_equity / self.initial_equity - 1
         max_drawdown = self._max_drawdown(df["Equity"])
         win_rate = self._win_rate(df)
+        
         return {
             "Total Return": f"{total_return:.2%}",
+            "Net Profit": f"${net_profit:,.2f}",       # <--- NEW
+            "Final Balance": f"${final_equity:,.2f}",  # <--- NEW
             "Max Drawdown": f"{max_drawdown:.2%}",
             "Win Rate": f"{win_rate:.2%}"
         }

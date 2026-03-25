@@ -3,6 +3,7 @@ venv/
 .env
 __pycache__/
 *.pyc
+data/
 
 # Distribution / packaging
 build/

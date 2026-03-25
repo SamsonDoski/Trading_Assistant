@@ -8,24 +8,35 @@ PROFILES = {
     "Aggressive": {
         "short_window": 10,
         "long_window": 30,
-        "stop_loss_pct": -0.05
+        "stop_loss_pct": -0.05,
+        "rsi_window": 10,      # Faster RSI to catch quick swings
+        "overbought": 80,      # Give it room to run
+        "oversold": 20         # Wait for deep crashes
     },
     "Swing": {
         "short_window": 20,
         "long_window": 50,
-        "stop_loss_pct": -0.08
+        "stop_loss_pct": -0.08,
+        "rsi_window": 14,      # Standard RSI
+        "overbought": 70,      # Standard sell line
+        "oversold": 30         # Standard buy line
     },
-    "Long-Term": {
+    "Long_Term": {
         "short_window": 50,
         "long_window": 200,
-        "stop_loss_pct": -0.15
+        "stop_loss_pct": -0.15,
+        "rsi_window": 21,      # Slower, smoother RSI
+        "overbought": 70,
+        "oversold": 30
     },
-    "Volatile": {
+    "Volatile": {  # Perfect for TSLA or NVDA
         "short_window": 15,
         "long_window": 40,
-        "stop_loss_pct": -0.12
+        "stop_loss_pct": -0.12,
+        "rsi_window": 14,
+        "overbought": 85,      # Volatile stocks stay overbought longer!
+        "oversold": 25         # They also crash harder!
     }
-
 }
 
 def get_profile(profile_name):

@@ -6,7 +6,7 @@ import yfinance as yf
 DATA_DIR = "data"
 
 #fetching data with default parameters satrt and end
-def fetch_data(ticker, start="2020-01-01", end="2025-09-10"):
+def fetch_data(ticker, start="2020-01-01", end="2026-03-23"):
     filename = f"{DATA_DIR}/{ticker}.csv"
     
     # If file exists, load from CSV

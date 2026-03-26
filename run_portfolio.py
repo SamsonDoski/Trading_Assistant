@@ -36,5 +36,11 @@ def main():
         print(f"{k}: {v}")
     print("-" * 30)
 
+    # ... after summary is printed ...
+    
+    # Example: Show the technical signals for the first ticker in the list
+    first_ticker = args.tickers[0]
+    simulator.visualize_results(ticker=first_ticker)
+
 if __name__ == "__main__":
     main()

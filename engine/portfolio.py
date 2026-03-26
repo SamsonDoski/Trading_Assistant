@@ -7,6 +7,8 @@ from strategies.moving_average import apply_moving_average_strategy
 from strategies.rsi import apply_rsi_strategy
 from engine.backtest import BacktestEngine
 from strategy_config import get_profile
+from utils.visualize1 import plot_combo_signals # Assuming these exist
+
 
 class PortfolioSimulator:
     def __init__(self, tickers, start_date, end_date, initial_equity=100000.0, profile="Swing", strategy="Combo"):
@@ -64,6 +66,9 @@ class PortfolioSimulator:
             engine = BacktestEngine(initial_equity=self.initial_equity)
             df_bt = engine.run(df)
             
+            # Store the backtest results for this ticker
+            self.portfolio_data[ticker] = df_bt
+            
             # 4. Extract Daily Returns for the Portfolio
             daily_returns = df_bt['Equity'].pct_change().fillna(0)
             daily_returns.name = ticker
@@ -95,3 +100,18 @@ class PortfolioSimulator:
             "Final Portfolio Balance": f"${final_equity:,.2f}",
             "Portfolio Max Drawdown": f"{max_drawdown * 100:.2f}%"
         }
+    
+
+    def visualize_results(self, ticker=None):
+        """
+        If ticker is provided, shows the technical MA/RSI breakdown for that stock.
+        Otherwise, shows the total Portfolio Equity Curve.
+        """        
+        if ticker and ticker in self.portfolio_data:
+            print(f"📊 Generating technical breakdown for {ticker}...")
+            # This calls the visualizer logic you just wrote
+            plot_combo_signals(self.portfolio_data[ticker], ticker)
+        else:
+            print("📈 Generating global portfolio performance...")
+            # Logic to plot the master 'Portfolio_Equity' curve
+            pass

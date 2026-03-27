@@ -25,7 +25,9 @@ class PortfolioSimulator:
         print(f"\n🚀 Starting Portfolio Simulation for: {', '.join(self.tickers)}")
         print(f"📈 Profile: {self.profile} | Strategy: {self.strategy} | Initial Equity: ${self.initial_equity:,.2f}")
         
-        all_daily_returns = []
+        # 1. Split the cash evenly on Day 1
+        allocated_capital = self.initial_equity / len(self.tickers)
+        all_equity_curves = []
 
         for ticker in self.tickers:
             print(f"Processing {ticker}...")
@@ -63,44 +65,79 @@ class PortfolioSimulator:
                 )
 
             # 3. Run Backtest
-            engine = BacktestEngine(initial_equity=self.initial_equity)
+            engine = BacktestEngine(initial_equity=allocated_capital)
             df_bt = engine.run(df)
             
             # Store the backtest results for this ticker
             self.portfolio_data[ticker] = df_bt
             
-            # 4. Extract Daily Returns for the Portfolio
-            daily_returns = df_bt['Equity'].pct_change().fillna(0)
-            daily_returns.name = ticker
-            all_daily_returns.append(daily_returns)
+            # Store the backtest results for this ticker
+            self.portfolio_data[ticker] = df_bt
+            
+            # 4. Extract just the raw dollar equity curve (NO pct_change)
+            equity_curve = df_bt['Equity']
+            equity_curve.name = ticker
+            all_equity_curves.append(equity_curve)
 
-        # Combine all individual stock returns into one giant DataFrame
-        portfolio_returns_df = pd.concat(all_daily_returns, axis=1)
+        # Combine all individual dollar curves into one giant DataFrame
+        portfolio_returns_df = pd.concat(all_equity_curves, axis=1)
         
-        # Calculate the equally weighted daily return of the whole portfolio
-        portfolio_returns_df['Portfolio_Daily_Return'] = portfolio_returns_df.mean(axis=1)
-
-        # Calculate the Master Equity Curve
-        portfolio_returns_df['Portfolio_Equity'] = self.initial_equity * (1 + portfolio_returns_df['Portfolio_Daily_Return']).cumprod()
+        # Calculate the Master Equity Curve by simply ADDING the bank accounts together
+        portfolio_returns_df['Portfolio_Equity'] = portfolio_returns_df.sum(axis=1)
         
         return portfolio_returns_df
 
     def portfolio_summary(self, df_portfolio):
-        """Calculates final metrics for the entire portfolio."""
-        final_equity = df_portfolio['Portfolio_Equity'].iloc[-1]
-        total_return = (final_equity - self.initial_equity) / self.initial_equity
-        
-        # Calculate Max Drawdown for the whole portfolio
-        roll_max = df_portfolio['Portfolio_Equity'].cummax()
-        drawdown = df_portfolio['Portfolio_Equity'] / roll_max - 1.0
-        max_drawdown = drawdown.min()
+            """Calculates final metrics for the entire portfolio and individual stocks."""
+            
+            # 1. Global Portfolio Metrics
+            final_equity = df_portfolio['Portfolio_Equity'].iloc[-1]
+            peak_equity = df_portfolio['Portfolio_Equity'].max() # The highest the account ever reached
+            total_return = (final_equity - self.initial_equity) / self.initial_equity
+            
+            roll_max = df_portfolio['Portfolio_Equity'].cummax()
+            drawdown = df_portfolio['Portfolio_Equity'] / roll_max - 1.0
+            max_drawdown = drawdown.min()
 
-        return {
-            "Total Portfolio Return": f"{total_return * 100:.2f}%",
-            "Final Portfolio Balance": f"${final_equity:,.2f}",
-            "Portfolio Max Drawdown": f"{max_drawdown * 100:.2f}%"
-        }
-    
+            # 2. Individual Stock Breakdown
+            stock_stats = []
+            best_stock = ""
+            best_profit = -float('inf')
+
+            # Calculate how much cash was actually given to each stock
+            allocated_capital = self.initial_equity / len(self.tickers)
+            
+            for ticker, df in self.portfolio_data.items():
+                # Since we passed allocated_capital to the engine, df['Equity'] is already correct!
+                stock_final = df['Equity'].iloc[-1] 
+                
+                # Calculate profit
+                stock_profit = stock_final - allocated_capital
+                
+                # Count exact Buy and Sell executions
+                buys = ((df['Signal'] == 1) & (df['Signal'].shift(1) != 1)).sum()
+                sells = ((df['Signal'] == 0) & (df['Signal'].shift(1) == 1)).sum()
+
+                stock_stats.append(f"  • {ticker.upper():<5} | Profit: ${stock_profit:>10,.2f} | Buys: {buys:<3} | Sells: {sells:<3}")
+
+                # Track the top performer
+                if stock_profit > best_profit:
+                    best_profit = stock_profit
+                    best_stock = ticker.upper()
+
+            # Format the breakdown list into a clean multi-line string
+            breakdown_str = "\n" + "\n".join(stock_stats)
+
+            # 3. Return the expanded dictionary
+            return {
+                "Total Portfolio Return": f"{total_return * 100:.2f}%",
+                "Peak Portfolio Balance": f"${peak_equity:,.2f}",
+                "Final Portfolio Balance": f"${final_equity:,.2f}",
+                "Portfolio Max Drawdown": f"{max_drawdown * 100:.2f}%",
+                "Top Performing Stock": f"{best_stock} (+${best_profit:,.2f})",
+                "Individual Breakdown": breakdown_str
+            }
+        
 
     def visualize_results(self, ticker=None):
         """

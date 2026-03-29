@@ -7,6 +7,7 @@ from strategies.rsi import apply_rsi_strategy
 from strategies.ma_rsi_combo import apply_combo_strategy
 from utils.visualize1 import plot_ma_signals as plot_ma
 from utils.visualize1 import plot_rsi_signals as plot_rsi
+from utils.visualize1 import plot_combo_signals as plot_combo
 from engine.backtest import BacktestEngine
 from strategy_config import get_profile
 
@@ -91,7 +92,7 @@ def main():
         plot_rsi(df, ticker)
     elif args.strategy == "Combo":
         # Only try to plot combo signals if we actually ran the Combo strategy
-        plot_ma(df, ticker)
+        plot_combo(df, ticker)
 
 if __name__ == "__main__":
     main()

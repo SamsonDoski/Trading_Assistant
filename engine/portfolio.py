@@ -7,7 +7,7 @@ from strategies.moving_average import apply_moving_average_strategy
 from strategies.rsi import apply_rsi_strategy
 from engine.backtest import BacktestEngine
 from strategy_config import get_profile
-from utils.visualize1 import plot_combo_signals # Assuming these exist
+from utils.visualize1 import plot_combo_signals, plot_ma_signals, plot_rsi_signals # Assuming these exist
 
 
 class PortfolioSimulator:
@@ -64,18 +64,21 @@ class PortfolioSimulator:
                     stop_loss_pct=self.profile_settings["stop_loss_pct"]
                 )
 
-            # 3. Run Backtest
+           # 3. Run Backtest
             engine = BacktestEngine(initial_equity=allocated_capital)
-            df_bt = engine.run(df)
             
-            # Store the backtest results for this ticker
-            self.portfolio_data[ticker] = df_bt
+            # --- THE CLONE FIX ---
+            # Hand the engine a copy() so it doesn't destroy our original columns!
+            df_bt = engine.run(df.copy())
             
-            # Store the backtest results for this ticker
-            self.portfolio_data[ticker] = df_bt
+            # Copy the newly calculated Equity column back onto our untouched original data
+            df['Equity'] = df_bt['Equity']
             
-            # 4. Extract just the raw dollar equity curve (NO pct_change)
-            equity_curve = df_bt['Equity']
+            # Store the original dataframe (RSI and MAs are now safe!)
+            self.portfolio_data[ticker] = df
+            
+            # 4. Extract just the raw dollar equity curve
+            equity_curve = df['Equity']
             equity_curve.name = ticker
             all_equity_curves.append(equity_curve)
 
@@ -140,15 +143,23 @@ class PortfolioSimulator:
         
 
     def visualize_results(self, ticker=None):
-        """
-        If ticker is provided, shows the technical MA/RSI breakdown for that stock.
-        Otherwise, shows the total Portfolio Equity Curve.
-        """        
-        if ticker and ticker in self.portfolio_data:
-            print(f"📊 Generating technical breakdown for {ticker}...")
-            # This calls the visualizer logic you just wrote
-            plot_combo_signals(self.portfolio_data[ticker], ticker)
-        else:
-            print("📈 Generating global portfolio performance...")
-            # Logic to plot the master 'Portfolio_Equity' curve
-            pass
+            """
+            If ticker is provided, shows the technical breakdown for that stock.
+            Otherwise, shows the total Portfolio Equity Curve.
+            """        
+            if ticker and ticker in self.portfolio_data:
+                print(f"📊 Generating technical breakdown for {ticker}...")
+                
+                df_to_plot = self.portfolio_data[ticker]
+                
+                # Route to the correct visualizer based on the strategy!
+                if self.strategy == "Combo":
+                    plot_combo_signals(df_to_plot, ticker)
+                elif self.strategy == "MA":
+                    plot_ma_signals(df_to_plot, ticker)
+                elif self.strategy == "RSI":
+                    plot_rsi_signals(df_to_plot, ticker)
+                    
+            else:
+                print("📈 Generating global portfolio performance...")
+                pass

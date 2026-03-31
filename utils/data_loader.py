@@ -1,34 +1,55 @@
-# utils/data_loader.py
 import os
 import pandas as pd
 import yfinance as yf
 
 DATA_DIR = "data"
 
-#fetching data with default parameters satrt and end
-def fetch_data(ticker, start="2020-01-01", end="2026-03-23"):
+def fetch_data(ticker, start="2020-01-01", end="2026-03-30", force_download=False):
+    os.makedirs(DATA_DIR, exist_ok=True)
     filename = f"{DATA_DIR}/{ticker}.csv"
     
-    # If file exists, load from CSV
-    '''
-    if os.path.exists(filename):
-        print(f"Loading cached data for {ticker}")
-        return pd.read_csv(filename, index_col=0, parse_dates=True, date_format="%Y-%m-%d")
-        '''
+    needs_update = False
+    requested_end_date = pd.to_datetime(end)
     
-    # Otherwise, download from yfinance
-    print(f"Downloading data for {ticker}")
-    # yfinance downloads data, if error, print error
-    try:
-        data = yf.download(ticker, start=start, end=end, auto_adjust=True)
-        data.index.name = "Date"
-        data.to_csv(filename)
-        print(f"Fetched {len(data)} rows. Last date: {data.index[-1].date()}")
-        return data
-    except Exception as e:
-        print(f"Error fetching data for {ticker}: {e}")
-        print(f"Loading archived cached data for {ticker}")
-        return pd.read_csv(filename, index_col=0, parse_dates=True, date_format="%Y-%m-%d")
+    # 1. THE STALE DATA DETECTOR
+    if os.path.exists(filename) and not force_download:
+        # Quickly peek at the file to see how old it is
+        df_temp = pd.read_csv(filename, index_col=0, parse_dates=True)
+        last_cached_date = df_temp.index[-1]
+        
+        # If you ask for Sept 2026, but the cache stops at March 2026...
+        if requested_end_date > last_cached_date:
+            print(f"🔄 Cache for {ticker} is stale (stops at {last_cached_date.date()}). Auto-updating...")
+            needs_update = True
+            
+    # 2. THE DOWNLOAD TRIGGER (Runs if missing, forced, or stale!)
+    if not os.path.exists(filename) or force_download or needs_update:
+        print(f"🌐 Downloading MASTER historical data for {ticker}...")
+        try:
+            data = yf.download(ticker, period="max", auto_adjust=True)
+            
+            if isinstance(data.columns, pd.MultiIndex):
+                data.columns = data.columns.droplevel(1)
+                
+            data.index.name = "Date"
+            data.to_csv(filename)
+            print(f"✅ Master cache built for {ticker} ({len(data)} rows).")
+            
+        except Exception as e:
+            print(f"❌ Error fetching data for {ticker}: {e}")
+            if not os.path.exists(filename):
+                return pd.DataFrame()
+            print(f"⚠️ Falling back to stale local data...")
 
-   # print(f"Fetched {len(data)} rows. Last date: {data.index[-1].date()}")
-
+    # 3. LOAD AND SLICE
+    print(f"📁 Loading data for {ticker}...")
+    df = pd.read_csv(filename, index_col=0, parse_dates=True)
+    
+    start_dt = pd.to_datetime(start)
+    
+    df_sliced = df.loc[start_dt:requested_end_date]
+    
+    if df_sliced.empty:
+        print(f"⚠️ Warning: Requested date range {start} to {end} not found in cache for {ticker}.")
+        
+    return df_sliced

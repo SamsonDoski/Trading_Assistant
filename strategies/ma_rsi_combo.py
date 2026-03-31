@@ -1,4 +1,4 @@
-# strategies/combo.py
+# strategies/ma_rsi_combo.py
 import numpy as np
 import pandas as pd
 

@@ -1,4 +1,5 @@
 import argparse
+from engine.backtest import BacktestEngine
 import os
 import config
 from utils.data_loader import fetch_data
@@ -7,18 +8,18 @@ from strategies.rsi import apply_rsi_strategy
 from strategies.ma_rsi_combo import apply_combo_strategy
 from utils.visualize1 import plot_ma_signals as plot_ma
 from utils.visualize1 import plot_rsi_signals as plot_rsi
-from engine.backtest import BacktestEngine
+from utils.visualize1 import plot_combo_signals as plot_combo
 from strategy_config import get_profile
 
 def main():
     # CLI argument parser
     parser = argparse.ArgumentParser(description="Risk-Adjusted MA Strategy Backtester")
-    parser.add_argument("--profile", type=str, default="Swing", help="Trade profile to use (Aggressive, Swing, Long-Term, Volatile)")
+    parser.add_argument("--profile", type=str, default="Swing", help="Trade profile to use (Aggressive, Swing, Long_Term, Volatile)")
     parser.add_argument("--ticker", type=str, default=config.DEFAULT_TICKER, help="Stock ticker symbol")
     parser.add_argument("--start", type=str, default=config.START_DATE, help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, default=config.END_DATE, help="End date (YYYY-MM-DD)")
     parser.add_argument("--equity", type=float, default=config.INITIAL_EQUITY, help="Initial equity for backtest")
-    parser.add_argument("--strategy", type=str, default="MA", choices=["MA", "RSI", "Combo"], help="Which strategy to run (MA, RSI, or Combo)")
+    parser.add_argument("--strategy", type=str, default="MA", help="Which strategy to run (MA, RSI, or Combo)")
     args = parser.parse_args()
 
     ticker = args.ticker.upper()
@@ -85,13 +86,13 @@ def main():
     # --- VISUALIZATION SWITCHBOARD ---
     if args.strategy == "MA":
         # Only try to plot MAs if we actually ran the MA strategy
-        plot_ma(df, ticker) 
+        plot_ma(df_bt, ticker) 
     elif args.strategy == "RSI":
         # Only try to plot RSI if we actually ran the RSI strategy
-        plot_rsi(df, ticker)
+        plot_rsi(df_bt, ticker)
     elif args.strategy == "Combo":
         # Only try to plot combo signals if we actually ran the Combo strategy
-        plot_ma(df, ticker)
+        plot_combo(df_bt, ticker)
 
 if __name__ == "__main__":
     main()

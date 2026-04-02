@@ -1,5 +1,7 @@
 # run_portfolio.py
 import argparse
+import os
+import config
 from engine.portfolio import PortfolioSimulator
 
 def main():
@@ -35,6 +37,23 @@ def main():
     for k, v in summary.items():
         print(f"{k}: {v}")
     print("-" * 30)
+
+    # ... after summary is printed ...
+    # Ensure results directory exists
+    os.makedirs(config.RESULTS_DIR, exist_ok=True)
+
+    
+    # Example: Show the technical signals for the first ticker in the list
+    print(f"\n📈 Visualizing signals for {args.tickers[0]}...")
+    print("Note: Only the first ticker's signals will be visualized in this demo.")
+    first_ticker = args.tickers[0]
+    simulator.visualize_results(ticker=first_ticker)
+
+    # Save results
+    for ticker in args.tickers:
+        results_path = os.path.join(config.RESULTS_DIR, f"{ticker}_position_test.csv")
+        df_portfolio.to_csv(results_path, index=False)
+        print(f"\n✅ Results saved to {results_path}")
 
 if __name__ == "__main__":
     main()

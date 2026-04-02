@@ -3,6 +3,7 @@ venv/
 .env
 __pycache__/
 *.pyc
+*.log
 data/
 
 # Distribution / packaging

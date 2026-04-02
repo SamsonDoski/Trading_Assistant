@@ -1,5 +1,3 @@
-
-```
 # Software Requirements Specification (SRS) - Trading Assistant V3.0
 
 **Project:** Autonomous Quantitative Trading Pipeline  

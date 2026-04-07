@@ -100,7 +100,7 @@ The system will operate in four distinct lifecycle phases:
 ---
 
 ## 5. Implementation Roadmap
-1. **Phase 1:** Build `config/memory.json` and the JSON read/write helper functions.
+1. **Phase 1:** Build `memory/stock_profile.json` and the JSON read/write helper functions.
 2. **Phase 2:** Write `researcher.py` to bridge the JSON state with your existing `optimizer.py`.
 3. **Phase 3:** Write the Alpaca Watchlist syncing script.
 4. **Phase 4:** Build the final `live_controller.py` that loops the watchlist, pulls custom parameters, calculates whole shares, and executes.

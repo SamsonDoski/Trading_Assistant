@@ -1,0 +1,72 @@
+{
+    "NVDA": {
+        "last_optimized": "2006-04-06",
+        "strategy": "Combo",
+        "best_short_window": 50,
+        "best_long_window": 100,
+        "rsi_period": 14
+    },
+    "AAPL": {
+        "last_optimized": "2026-04-07",
+        "strategy": "Combo",
+        "best_short_window": 5,
+        "best_long_window": 30,
+        "rsi_period": 14
+    },
+    "MSFT": {
+        "last_optimized": "2006-04-06",
+        "strategy": "Combo",
+        "best_short_window": 5,
+        "best_long_window": 100,
+        "rsi_period": 14
+    },
+    "TSLA": {
+        "last_optimized": "2006-04-06",
+        "strategy": "Combo",
+        "best_short_window": 5,
+        "best_long_window": 30,
+        "rsi_period": 14
+    },
+    "AMZN": {
+        "last_optimized": "2006-04-06",
+        "strategy": "Combo",
+        "best_short_window": 20,
+        "best_long_window": 30,
+        "rsi_period": 14
+    },
+    "META": {
+        "last_optimized": "2006-04-06",
+        "strategy": "Combo",
+        "best_short_window": 50,
+        "best_long_window": 300,
+        "rsi_period": 14
+    },
+    "GOOGL": {
+        "last_optimized": "2006-04-06",
+        "strategy": "Combo",
+        "best_short_window": 20,
+        "best_long_window": 200,
+        "rsi_period": 14
+    },
+    "NFLX": {
+        "last_optimized": "2006-04-06",
+        "strategy": "Combo",
+        "best_short_window": 40,
+        "best_long_window": 50,
+        "rsi_period": 14
+    },
+    "AMD": {
+        "last_optimized": "2006-04-06",
+        "strategy": "Combo",
+        "best_short_window": 5,
+        "best_long_window": 10,
+        "rsi_period": 14
+    },
+    "SMCI": {
+        "last_optimized": "2006-04-06",
+        "strategy": "Combo",
+        "best_short_window": 20,
+        "best_long_window": 250,
+        "rsi_period": 14
+    }
+}

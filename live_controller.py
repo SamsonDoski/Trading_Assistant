@@ -1,5 +1,6 @@
 import os
 import sys
+import requests
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from alpaca.trading.client import TradingClient
@@ -71,7 +72,9 @@ def run_live_pipeline():
         already_owned = ticker in open_positions
         
         if latest_signal == 1 and not already_owned:
-            print(f"🚀 BUY SIGNAL! Executing ${NOTIONAL_ALLOCATION} notional buy for {ticker}...")
+            msg = f"🚀 BUY SIGNAL! Executed ${NOTIONAL_ALLOCATION} buy for **{ticker}** at ${current_price:.2f}"
+            print(msg)
+            # print(f"🚀 BUY SIGNAL! Executing ${NOTIONAL_ALLOCATION} notional buy for {ticker}...")
             order_data = MarketOrderRequest(
                 symbol=ticker,
                 notional=NOTIONAL_ALLOCATION,
@@ -80,17 +83,29 @@ def run_live_pipeline():
             )
             trading_client.submit_order(order_data=order_data)
             print("✅ Buy order submitted successfully.")
+            send_notification(msg)
             
         elif latest_signal == 0 and already_owned:
-            print(f"🛑 SELL SIGNAL! Liquidating position for {ticker}...")
+            msg = f"🛑 SELL SIGNAL! Liquidating position for **{ticker}**"
+            print(msg)
             trading_client.close_position(ticker)
             print("✅ Sell order submitted successfully.")
-            
+            send_notification(msg)
+
         elif latest_signal == 1 and already_owned:
             print("⏳ We already own this stock. Holding position.")
             
         elif latest_signal == 0 and not already_owned:
             print("⏳ Waiting for a buy signal.")
+            
+
+
+def send_notification(message):
+    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
+    if webhook_url:
+        payload = {"content": f"🤖 **Trading Update:** {message}"}
+        requests.post(webhook_url, json=payload)
 
 if __name__ == "__main__":
     run_live_pipeline()
+

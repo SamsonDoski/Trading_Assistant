@@ -60,8 +60,8 @@ The system will operate in four distinct lifecycle phases:
 * **Data Fetching:** Pulls daily bars via Alpaca API (replacing `yfinance`).
 * **Signal Generation:** Feeds the daily data and the custom `memory.json` parameters into the `ComboStrategy` class.
 * **Position Checking:** Queries the Alpaca API to see if the bot already holds an active position in the stock.
-* **Risk & Sizing Logic (Whole Shares):**
-  * Determines the allocated risk capital (e.g., 5% of total account equity).
+* **Risk & Sizing Logic (Whole dollar cost of share):**
+  * Determines the allocated risk capital (e.g., 95% of total account $ equity).
   * Calculates exact whole shares using floor division to prevent over-leveraging: `qty = math.floor(allocated_cash / current_price)`.
 * **Order Execution:** Submits exact whole-share `MarketOrderRequest` payloads (Buy/Sell) to Alpaca.
 
@@ -85,8 +85,8 @@ The system will operate in four distinct lifecycle phases:
 ### 3.3 Live Order Execution
 | Req ID | Description |
 | :--- | :--- |
-| **REQ-3.3.1** | The system must calculate order size based on total account equity, not a fixed dollar amount. |
-| **REQ-3.3.2** | The system must only purchase whole shares (no fractional orders). |
+| **REQ-3.3.1** | The system must calculate order size based on a fixed percentage of total account equity (e.g., 5% Notional allocation). |
+| **REQ-3.3.2** | The system must use Alpaca's Notional order feature to purchase fractional shares, ensuring exact dollar-value allocation. |
 | **REQ-3.3.3** | The system must liquidate a position entirely if the Combo Strategy returns a 0 (Sell) signal and the asset is currently in the Alpaca portfolio. |
 
 ---

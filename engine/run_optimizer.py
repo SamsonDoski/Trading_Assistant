@@ -13,7 +13,7 @@ def run_optimization(ticker, start_date, end_date, strategy="Combo", initial_equ
     df_raw = fetch_data(ticker, start_date, end_date)
     if df_raw.empty:
         print("Data fetch failed.")
-        return
+        return None, None # <-- RETURN NONE IF FAILED
 
     # 2. Define the Grid
     short_mas = [5, 10, 20, 30, 40, 50]
@@ -50,7 +50,7 @@ def run_optimization(ticker, start_date, end_date, strategy="Combo", initial_equ
             )
         else:
             print(f"Strategy {strategy} not supported for this grid.")
-            return
+            return None, None # <-- RETURN NONE IF FAILED
         
         # 4. Run Backtest
         engine = BacktestEngine(initial_equity=initial_equity)
@@ -74,21 +74,31 @@ def run_optimization(ticker, start_date, end_date, strategy="Combo", initial_equ
         })
 
     # 5. Rank the Results
+    if not results:
+        return None, None
+        
     results_df = pd.DataFrame(results)
+    # Will stick to 'Return (%)' for now!
     results_df = results_df.sort_values(by="Return (%)", ascending=False).reset_index(drop=True)
     
     print(f"🏆 TOP 5 PARAMETER SETTINGS FOR {ticker.upper()} ({start_date} to {end_date}) | Strategy: {strategy}:")
     print("-" * 75)
     print(results_df.head(5).to_string(index=False, float_format="%.2f"))
     print("-" * 75)
+    
+    # --- NEW V3 LOGIC: GRAB THE #1 WINNER AND RETURN IT ---
+    best_short = int(results_df.iloc[0]["Short MA"])
+    best_long = int(results_df.iloc[0]["Long MA"])
+    
+    return best_short, best_long
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Optimize Trading Strategies")
     parser.add_argument("--ticker", type=str, required=True, help="Ticker to optimize")
     parser.add_argument("--start", type=str, default="2020-01-01", help="Start Date")
     parser.add_argument("--end", type=str, default="2024-01-01", help="End Date")
-    # Added the strategy argument here!
     parser.add_argument("--strategy", type=str, default="Combo", choices=["Combo", "MA"], help="Which strategy to optimize")
     args = parser.parse_args()
     
+    # It still works manually from the terminal!
     run_optimization(args.ticker, args.start, args.end, strategy=args.strategy)

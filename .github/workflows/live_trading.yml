@@ -2,8 +2,8 @@ name: Alpaca Live Trader
 
 on:
   schedule:
-    # Runs at 13:35 UTC (9:35 AM ET) Mon-Fri
-    - cron: '55 13 * * 1-5'
+    # Runs at 13:30 UTC (9:30 AM ET) Mon-Fri
+    - cron: '30 13 * * 1-5'
   workflow_dispatch: # Allows you to run it manually from the Actions tab
 
 jobs:

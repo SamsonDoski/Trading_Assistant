@@ -8,10 +8,10 @@ PROFILES = {
     "Aggressive": {
         "short_window": 10,
         "long_window": 30,
-        "stop_loss_pct": -0.05,
-        "rsi_window": 10,      # Faster RSI to catch quick swings
-        "overbought": 80,      # Give it room to run
-        "oversold": 20         # Wait for deep crashes
+        "stop_loss_pct": -0.15,
+        "rsi_window": 14,      # Faster RSI to catch quick swings
+        "overbought": 70,      # Give it room to run
+        "oversold": 30         # Wait for deep crashes
     },
     "Swing": {
         "short_window": 20,

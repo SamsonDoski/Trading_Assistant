@@ -68,5 +68,19 @@
         "best_short_window": 50,
         "best_long_window": 100,
         "rsi_period": 14
+    },
+    "GLD": {
+        "last_optimized": "2026-04-07",
+        "strategy": "Combo",
+        "best_short_window": 30,
+        "best_long_window": 50,
+        "rsi_period": 14
+    },
+    "PLTR": {
+        "last_optimized": "2026-04-07",
+        "strategy": "Combo",
+        "best_short_window": 5,
+        "best_long_window": 30,
+        "rsi_period": 14
     }
 }

@@ -52,5 +52,5 @@ def run_research_cycle(tickers):
 if __name__ == "__main__":
     # The same watchlist the Live Controller uses
    # Updated list in engine/researcher.py
-    master_watchlist = ["AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "META", "GOOGL", "NFLX", "AMD", "SMCI"]
+    master_watchlist = ["AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "META", "GOOGL", "NFLX", "AMD", "SMCI", "GLD", "PLTR"]
     run_research_cycle(master_watchlist)

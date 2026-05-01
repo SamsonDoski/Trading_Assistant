@@ -46,51 +46,47 @@ def run_live_pipeline():
         return
 
     for ticker, rules in profiles.items():
-        print(f"\n--- Processing {ticker} ---")
-        send_notification(f"\n--- Processing {ticker} ---")
-        
+        # Start compiling a single message for this stock
+        log_msg = f"🔍 **{ticker}** | "
+
         # 1. State Check
         if is_stale(ticker):
-            print(f"⚠️ {ticker} is stale. Skipping until Researcher updates it.")
-            send_notification(f"⚠️ {ticker} is stale. Skipping until Researcher updates it.")
+            log_msg += "⚠️ Stale profile. Skipping."
+            print(log_msg)
+            send_notification(log_msg)
             continue
-            
+
         short_ma = rules["best_short_window"]
         long_ma = rules["best_long_window"]
         rsi_period = rules.get("rsi_period", 14)
         
-        print(f"✅ Active Profile: {short_ma}/{long_ma} MA. Fetching live data...")
-        send_notification(f"✅ Active Profile: {short_ma}/{long_ma} MA. Fetching live data...")
+        log_msg += f"MA: {short_ma}/{long_ma} | "
 
-        
-        # 2. Fetch enough data to calculate the Long MA (plus a 50-day buffer)
+        # 2. Fetch Data (WITH THE NEW CALENDAR BUFFER FIX)
         end_date = datetime.now().strftime("%Y-%m-%d")
-        start_date = (datetime.now() - timedelta(days=long_ma + 50)).strftime("%Y-%m-%d")
-        
+        start_date = (datetime.now() - timedelta(days=(long_ma * 2) + 365)).strftime("%Y-%m-%d")
+
         df = fetch_data(ticker, start_date, end_date)
         if df.empty:
-            print(f"❌ Failed to fetch data for {ticker}.")
-            send_notification(f"❌ Failed to fetch data for {ticker}.")
+            log_msg += "❌ Data fetch failed."
+            print(log_msg)
+            send_notification(log_msg)
             continue
-            
+
         # 3. Calculate Live Strategy Signals
-        df_signal = apply_combo_strategy(
-            df, short_window=short_ma, long_window=long_ma, rsi_window=rsi_period
-        )
+        df_signal = apply_combo_strategy(df, short_window=short_ma, long_window=long_ma, rsi_window=rsi_period)
+
+        latest_signal = df_signal.iloc[-2]['Signal']
+        current_price = df_signal.iloc[-2]['Close']
         
-        # Look at the absolute last row of data (Today)
-        latest_signal = df_signal.iloc[-1]['Signal']
-        current_price = df_signal.iloc[-1]['Close']
-        print(f"📊 Current Price: ${current_price:.2f} | Latest Signal: {latest_signal}")
-        send_notification(f"📊 Current Price: ${current_price:.2f} | Latest Signal: {latest_signal}")
-        
+        log_msg += f"Price: ${current_price:.2f} | Sig: {latest_signal} | "
+
         # 4. Execution Switchboard
         already_owned = ticker in open_positions
-        
+
         if latest_signal == 1 and not already_owned:
-            msg = f"🚀 BUY SIGNAL! Executed ${NOTIONAL_ALLOCATION} buy for **{ticker}** at ${current_price:.2f}"
-            print(msg)
-            # print(f"🚀 BUY SIGNAL! Executing ${NOTIONAL_ALLOCATION} notional buy for {ticker}...")
+            action_msg = f"🚀 **BUY EXECUTED** (${NOTIONAL_ALLOCATION})"
+            
             order_data = MarketOrderRequest(
                 symbol=ticker,
                 notional=NOTIONAL_ALLOCATION,
@@ -98,23 +94,22 @@ def run_live_pipeline():
                 time_in_force=TimeInForce.DAY
             )
             trading_client.submit_order(order_data=order_data)
-            print("✅ Buy order submitted successfully.")
-            send_notification(msg)
+            log_msg += action_msg
             
         elif latest_signal == 0 and already_owned:
-            msg = f"🛑 SELL SIGNAL! Liquidating position for **{ticker}**"
-            print(msg)
+            action_msg = "🛑 **SELL EXECUTED** (Liquidated)"
             trading_client.close_position(ticker)
-            print("✅ Sell order submitted successfully.")
-            send_notification(msg)
-
+            log_msg += action_msg
+            
         elif latest_signal == 1 and already_owned:
-            print("⏳ You already own this stock. Holding position.")
-            send_notification("⏳ You already own this stock. Holding position.")
+            log_msg += "⏳ Holding."
             
         elif latest_signal == 0 and not already_owned:
-            print("⏳ Waiting for a buy signal.")
-            send_notification("⏳ Waiting for a buy signal.")
+            log_msg += "⏳ Waiting."
+
+        # 5. Send ONE clean ping to Discord per stock
+        print(log_msg)
+        send_notification(log_msg)
             
             
 

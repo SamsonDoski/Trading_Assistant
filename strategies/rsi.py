@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-def apply_rsi_strategy(df, rsi_window=14, overbought=70, oversold=30, stop_loss_pct=-0.08):
+def apply_rsi_strategy(df, rsi_window=14, overbought=70, oversold=30, stop_loss_pct=-0.15):
     """
     Calculates the Relative Strength Index (RSI) and generates buy/sell signals.
     """

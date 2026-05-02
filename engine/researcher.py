@@ -29,9 +29,9 @@ def run_research_cycle(tickers):
     """Scans the watchlist and re-optimizes stale stocks."""
     print("\n🔍 Starting Autonomous Research Cycle...")
     
-    # Dynamically calculate a 365 day lookback window for the backtest
+    # Dynamically calculate a 3-year lookback window for the backtest
     end_date = datetime.now().strftime("%Y-%m-%d")
-    start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
     
     for ticker in tickers:
         if is_stale(ticker):
@@ -48,9 +48,16 @@ def run_research_cycle(tickers):
                 
         else:
             print(f"\n✨ {ticker} is fresh. No optimization needed.")
+    print("\n🔍 Research Cycle Completed.")
+    return "Research cycle completed."
 
 if __name__ == "__main__":
     # The same watchlist the Live Controller uses
    # Updated list in engine/researcher.py
-    master_watchlist = ["AAPL", "NVDA", "TSLA", "MSFT", "AMZN", "META", "GOOGL", "NFLX", "AMD", "SMCI", "GLD", "PLTR"]
+    master_watchlist = [
+    "NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "META",
+    "GOOGL", "NFLX", "AMD", "SMCI", "GLD", "PLTR", # Originals
+    "ORCL", "CRWV", "JPM", "WMT", "LLY", "AVGO",
+    "MU", "V", "COST", "CRWD", "AIQ", "QQQ" # The Expansion Pack
+    ]
     run_research_cycle(master_watchlist)

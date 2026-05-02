@@ -3,7 +3,7 @@ import pandas as pd
 
 # function calculates and adds Moving Averages to all rows(days)
 # and indicates buy and sell signals
-def apply_moving_average_strategy(df, short_window=50, long_window=200, stop_loss_pct=-0.05):
+def apply_moving_average_strategy(df, short_window=50, long_window=200, stop_loss_pct=-0.15):
     
     # SAFETY FIX: Force "Close" to be a 1D Series to prevent yfinance MultiIndex bugs
     if isinstance(df["Close"], pd.DataFrame):

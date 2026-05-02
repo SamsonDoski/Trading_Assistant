@@ -1,86 +1,170 @@
 {
     "NVDA": {
-        "last_optimized": "2026-04-09",
+        "last_optimized": "2026-05-01",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 100,
         "rsi_period": 14
     },
     "AAPL": {
-        "last_optimized": "2026-04-09",
+        "last_optimized": "2026-05-01",
         "strategy": "Combo",
-        "best_short_window": 20,
-        "best_long_window": 30,
+        "best_short_window": 40,
+        "best_long_window": 100,
         "rsi_period": 14
     },
     "MSFT": {
-        "last_optimized": "2026-04-09",
+        "last_optimized": "2026-05-01",
         "strategy": "Combo",
-        "best_short_window": 10,
+        "best_short_window": 5,
         "best_long_window": 100,
         "rsi_period": 14
     },
     "TSLA": {
-        "last_optimized": "2026-04-09",
+        "last_optimized": "2026-05-01",
         "strategy": "Combo",
-        "best_short_window": 20,
+        "best_short_window": 5,
         "best_long_window": 30,
         "rsi_period": 14
     },
     "AMZN": {
-        "last_optimized": "2026-04-09",
+        "last_optimized": "2026-05-01",
         "strategy": "Combo",
         "best_short_window": 5,
-        "best_long_window": 10,
-        "rsi_period": 14
-    },
-    "META": {
-        "last_optimized": "2026-04-09",
-        "strategy": "Combo",
-        "best_short_window": 5,
-        "best_long_window": 10,
-        "rsi_period": 14
-    },
-    "GOOGL": {
-        "last_optimized": "2026-04-09",
-        "strategy": "Combo",
-        "best_short_window": 5,
-        "best_long_window": 50,
-        "rsi_period": 14
-    },
-    "NFLX": {
-        "last_optimized": "2026-04-09",
-        "strategy": "Combo",
-        "best_short_window": 10,
         "best_long_window": 30,
         "rsi_period": 14
     },
-    "AMD": {
-        "last_optimized": "2026-04-09",
+    "META": {
+        "last_optimized": "2026-05-01",
         "strategy": "Combo",
-        "best_short_window": 30,
+        "best_short_window": 20,
         "best_long_window": 100,
         "rsi_period": 14
     },
+    "GOOGL": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 20,
+        "best_long_window": 200,
+        "rsi_period": 14
+    },
+    "NFLX": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 50,
+        "best_long_window": 100,
+        "rsi_period": 14
+    },
+    "AMD": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 5,
+        "best_long_window": 30,
+        "rsi_period": 14
+    },
     "SMCI": {
-        "last_optimized": "2026-04-09",
+        "last_optimized": "2026-05-01",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 100,
         "rsi_period": 14
     },
     "GLD": {
-        "last_optimized": "2026-04-07",
+        "last_optimized": "2026-05-01",
         "strategy": "Combo",
-        "best_short_window": 30,
-        "best_long_window": 50,
+        "best_short_window": 20,
+        "best_long_window": 100,
         "rsi_period": 14
     },
     "PLTR": {
-        "last_optimized": "2026-04-07",
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 50,
+        "best_long_window": 100,
+        "rsi_period": 14
+    },
+    "ORCL": {
+        "last_optimized": "2026-05-01",
         "strategy": "Combo",
         "best_short_window": 5,
         "best_long_window": 30,
+        "rsi_period": 14
+    },
+    "CRWV": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 5,
+        "best_long_window": 10,
+        "rsi_period": 14
+    },
+    "JPM": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 50,
+        "best_long_window": 250,
+        "rsi_period": 14
+    },
+    "WMT": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 5,
+        "best_long_window": 150,
+        "rsi_period": 14
+    },
+    "LLY": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 10,
+        "best_long_window": 50,
+        "rsi_period": 14
+    },
+    "AVGO": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 50,
+        "best_long_window": 250,
+        "rsi_period": 14
+    },
+    "MU": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 50,
+        "best_long_window": 100,
+        "rsi_period": 14
+    },
+    "V": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 50,
+        "best_long_window": 100,
+        "rsi_period": 14
+    },
+    "COST": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 10,
+        "best_long_window": 100,
+        "rsi_period": 14
+    },
+    "CRWD": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 10,
+        "best_long_window": 30,
+        "rsi_period": 14
+    },
+    "AIQ": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 5,
+        "best_long_window": 10,
+        "rsi_period": 14
+    },
+    "QQQ": {
+        "last_optimized": "2026-05-01",
+        "strategy": "Combo",
+        "best_short_window": 50,
+        "best_long_window": 350,
         "rsi_period": 14
     }
 }

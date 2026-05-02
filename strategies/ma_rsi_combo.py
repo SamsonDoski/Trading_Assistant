@@ -2,7 +2,7 @@
 import numpy as np
 import pandas as pd
 
-def apply_combo_strategy(df, short_window=50, long_window=200, rsi_window=14, overbought=70, oversold=30, stop_loss_pct=-0.08):
+def apply_combo_strategy(df, short_window=50, long_window=200, rsi_window=14, overbought=70, oversold=30, stop_loss_pct=-0.15):
     """
     Combines Moving Average trend-following with RSI momentum.
     Buys dips in an uptrend, sells on trend reversals.

@@ -76,15 +76,18 @@ def run_live_pipeline():
         # 3. Calculate Live Strategy Signals
         df_signal = apply_combo_strategy(df, short_window=short_ma, long_window=long_ma, rsi_window=rsi_period)
 
+
         latest_signal = df_signal.iloc[-2]['Signal']
+        previous_signal = df_signal.iloc[-3]['Signal']
         current_price = df_signal.iloc[-2]['Close']
+        current_rsi = df_signal.iloc[-2]['RSI']
         
-        log_msg += f"Price: ${current_price:.2f} | Sig: {latest_signal} | "
+        log_msg += f"Price: ${current_price:.2f} | RSI: {current_rsi:.1f} | Sig: {latest_signal} | "
 
         # 4. Execution Switchboard
         already_owned = ticker in open_positions
 
-        if latest_signal == 1 and not already_owned:
+        if latest_signal == 1 and previous_signal == 0 and not already_owned:
             action_msg = f"🚀 **BUY EXECUTED** (${NOTIONAL_ALLOCATION})"
             
             order_data = MarketOrderRequest(
@@ -102,10 +105,16 @@ def run_live_pipeline():
             log_msg += action_msg
             
         elif latest_signal == 1 and already_owned:
-            log_msg += "⏳ Holding."
+            # Add live P/L tracking to the hold message
+            current_pl = float(open_positions[ticker].unrealized_plpc) * 100
+            log_msg += f"⏳ Holding (P/L: {current_pl:+.2f}%)"
             
         elif latest_signal == 0 and not already_owned:
-            log_msg += "⏳ Waiting."
+            log_msg += "⏳ Waiting, Trend negative or RSI is high."
+
+        # This catches the "Chasing" scenario
+        elif latest_signal == 1 and previous_signal == 1 and not already_owned:
+            log_msg += "⏳ Trend positive but missed RSI dip. Waiting for next RSI reset."
 
         # 5. Send ONE clean ping to Discord per stock
         print(log_msg)

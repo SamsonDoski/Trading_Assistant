@@ -80,8 +80,9 @@ def run_live_pipeline():
         latest_signal = df_signal.iloc[-2]['Signal']
         previous_signal = df_signal.iloc[-3]['Signal']
         current_price = df_signal.iloc[-2]['Close']
+        current_rsi = df_signal.iloc[-2]['RSI']
         
-        log_msg += f"Price: ${current_price:.2f} | Sig: {latest_signal} | "
+        log_msg += f"Price: ${current_price:.2f} | RSI: {current_rsi:.1f} | Sig: {latest_signal} | "
 
         # 4. Execution Switchboard
         already_owned = ticker in open_positions
@@ -104,10 +105,12 @@ def run_live_pipeline():
             log_msg += action_msg
             
         elif latest_signal == 1 and already_owned:
-            log_msg += "⏳ Holding, Trend positive."
+            # Add live P/L tracking to the hold message
+            current_pl = float(open_positions[ticker].unrealized_plpc) * 100
+            log_msg += f"⏳ Holding (P/L: {current_pl:+.2f}%)"
             
         elif latest_signal == 0 and not already_owned:
-            log_msg += "⏳ Waiting, Trend negative."
+            log_msg += "⏳ Waiting, Trend negative or RSI is high."
 
         # This catches the "Chasing" scenario
         elif latest_signal == 1 and previous_signal == 1 and not already_owned:

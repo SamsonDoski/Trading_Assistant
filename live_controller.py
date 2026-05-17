@@ -101,8 +101,10 @@ def run_live_pipeline():
             
         elif latest_signal == 0 and already_owned:
             action_msg = "🛑 **SELL EXECUTED** (Liquidated)"
+            closing_pl = float(open_positions[ticker].unrealized_plpc) * 100
             trading_client.close_position(ticker)
             log_msg += action_msg
+            log_msg += f" (P/L: {closing_pl:+.2f}%)"
             
         elif latest_signal == 1 and already_owned:
             # Add live P/L tracking to the hold message

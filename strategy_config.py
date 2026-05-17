@@ -22,10 +22,10 @@ PROFILES = {
         "oversold": 30         # Standard buy line
     },
     "Long_Term": {
-        "short_window": 50,
-        "long_window": 200,
+        "short_window": 20,
+        "long_window": 100,
         "stop_loss_pct": -0.15,
-        "rsi_window": 21,      # Slower, smoother RSI
+        "rsi_window": 14,      # Slower, smoother RSI
         "overbought": 70,
         "oversold": 30
     },

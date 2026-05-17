@@ -1,6 +1,15 @@
+import os
+import sys
 import pandas as pd
 import itertools
 import argparse
+from datetime import datetime, timedelta
+
+# Force Python to recognize the parent directory (trading_assistant) as the root
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.abspath(os.path.join(current_dir, '..'))
+sys.path.append(parent_dir)
+
 from utils.data_loader import fetch_data
 from strategies.ma_rsi_combo import apply_combo_strategy
 from strategies.moving_average import apply_moving_average_strategy
@@ -8,9 +17,17 @@ from engine.backtest import BacktestEngine
 
 def run_optimization(ticker, start_date, end_date, strategy="Combo", initial_equity=10000.0):
     print(f"\n⚙️ Starting {strategy} Optimizer for {ticker.upper()}...")
+
+    # 1. THE "FAT" FETCH (The Runway)
+    # Convert the requested start_date string into a mathable datetime object
+    requested_start = datetime.strptime(start_date, "%Y-%m-%d")
+
+    # Subtract a 730-day buffer to create a massive runway for the indicators
+    fetch_start = (requested_start - timedelta(days=730)).strftime("%Y-%m-%d")
+
+    # Fetch the padded data using the NEW buffered date
+    df_raw = fetch_data(ticker, start=fetch_start, end=end_date)
     
-    # 1. Fetch Data
-    df_raw = fetch_data(ticker, start_date, end_date)
     if df_raw.empty:
         print("Data fetch failed.")
         return None, None # <-- RETURN NONE IF FAILED
@@ -30,7 +47,8 @@ def run_optimization(ticker, start_date, end_date, strategy="Combo", initial_equ
             
         df_test = df_raw.copy()
         
-        # --- STRATEGY SWITCHBOARD ---
+        # --- STRATEGY SWITCHBOARD (Warm-Up Phase) ---
+        # We calculate the indicators on the massive padded dataframe
         if strategy == "Combo":
             df_test = apply_combo_strategy(
                 df_test,
@@ -52,9 +70,34 @@ def run_optimization(ticker, start_date, end_date, strategy="Combo", initial_equ
             print(f"Strategy {strategy} not supported for this grid.")
             return None, None # <-- RETURN NONE IF FAILED
         
+    # --- STRATEGY SWITCHBOARD (Warm-Up Phase) ---
+        if strategy == "Combo":
+            df_test = apply_combo_strategy(
+                df_test,
+                short_window=short_ma,
+                long_window=long_ma,
+                rsi_window=14,
+                overbought=70,
+                oversold=30,
+                stop_loss_pct=-0.15 
+            )
+            
+        # --- NEW: THE GHOST TRADE FIX ---
+        # 1. Flagging the exact days a FRESH buy signal happens (Transition from 0 to 1)
+        # Because we calculate this on df_test, it uses the runway data to check yesterday's signal perfectly.
+        df_test['Buy_Trigger'] = (df_test['Signal'] == 1) & (df_test['Signal'].shift(1) == 0)
+        
+        # --- THE SLICE ---
+        df_trading_window = df_test.loc[start_date : end_date].copy()
+        
+        # 2. Wipe out ongoing trades from the past. 
+        # If the cumulative sum of fresh Buy_Triggers is 0, a new trade hasn't officially started yet.
+        df_trading_window.loc[df_trading_window['Buy_Trigger'].cumsum() == 0, 'Signal'] = 0
+        
         # 4. Run Backtest
         engine = BacktestEngine(initial_equity=initial_equity)
-        df_bt = engine.run(df_test)
+        # We pass ONLY the strictly sliced trading window into the P/L accounting
+        df_bt = engine.run(df_trading_window)
         
         final_equity = df_bt['Equity'].iloc[-1]
         total_return = (final_equity - initial_equity) / initial_equity

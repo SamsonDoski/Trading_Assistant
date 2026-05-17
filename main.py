@@ -1,4 +1,5 @@
 import argparse
+from datetime import datetime, timedelta
 from engine.backtest import BacktestEngine
 import os
 import config
@@ -24,8 +25,14 @@ def main():
 
     ticker = args.ticker.upper()
 
+
+
     # Fetch data
-    df = fetch_data(ticker, start=args.start, end=args.end)
+    # requested start date formatted to datetime 
+    requested_start = datetime.strptime(args.start, "%Y-%m-%d")
+
+    # fetches data for buffer and MA warm up for 730 days before requested date.
+    df = fetch_data(ticker, start=(requested_start - timedelta(days=730)).strftime("%Y-%m-%d"), end=args.end)
     if df.empty:
         print(f"[ERROR] No data found for {ticker} in the given date range.")
         return
@@ -64,9 +71,21 @@ def main():
         )
 
 
+    # --- NEW: THE GHOST TRADE FIX ---
+    # 1. Flagging the exact days a FRESH buy signal happens (Transition from 0 to 1)
+    # Because we calculate this on df_test, it uses the runway data to check yesterday's signal perfectly.
+    df['Buy_Trigger'] = (df['Signal'] == 1) & (df['Signal'].shift(1) == 0)
+    
+    # --- THE SLICE ---
+    df_trading_window = df.loc[args.start : args.end].copy()
+    
+    # 2. Wipe out ongoing trades from the past. 
+    # If the cumulative sum of fresh Buy_Triggers is 0, a new trade hasn't officially started yet.
+    df_trading_window.loc[df_trading_window['Buy_Trigger'].cumsum() == 0, 'Signal'] = 0
+
     # Run backtest
     engine = BacktestEngine(initial_equity=args.equity)
-    df_bt = engine.run(df)
+    df_bt = engine.run(df_trading_window)
     summary = engine.summary(df_bt)
 
     # Print summary in a clean format

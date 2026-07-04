@@ -19,6 +19,27 @@ import pandas as pd
 import pytest
 
 
+
+#-------------------------------------------------------NEW: Lambda Handler Tests ------------------------------------------------
+class TestLambdaHandler:
+    def test_returns_200_and_delegates(self, monkeypatch):
+        import importlib
+        mod = importlib.import_module("aws.lambda_handler")
+        called = {"n": 0}
+        monkeypatch.setattr(mod, "run_live_pipeline",
+                            lambda: called.__setitem__("n", called["n"] + 1))
+        resp = mod.lambda_handler({}, None)
+        assert resp["statusCode"] == 200
+        assert called["n"] == 1
+
+    def test_returns_500_on_failure(self, monkeypatch):
+        import importlib
+        mod = importlib.import_module("aws.lambda_handler")
+        def boom(): raise RuntimeError("kaboom")
+        monkeypatch.setattr(mod, "run_live_pipeline", boom)
+        resp = mod.lambda_handler({}, None)
+        assert resp["statusCode"] == 500
+
 # ---------------------------------------------------------------- helpers
 def make_price_df(prices):
     idx = pd.date_range("2024-01-01", periods=len(prices), freq="D")

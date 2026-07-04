@@ -37,6 +37,14 @@ To ensure maintainability and isolate failures, the monolithic `live_controller.
 - **Responsibility:** Strictly handles Alpaca API communications.
 - **Logic:** Accepts the payload dictionary from the Allocator and loops through it, authenticating with the broker and submitting standard Market Buy/Sell orders. 
 
+### 2.4 The Signal Engine (`engine/scanner.py`)
+- **Responsibility:** Fetches historical data and computes the MA/RSI combo signals.
+- **Logic:** Returns a clean signal dict (latest/previous signal, price, RSI) to the controller. Owns all indicator math so the controller performs none.
+
+### 2.5 The Reporter (`utils/notifier.py`)
+- **Responsibility:** Strictly handles Discord webhook communication.
+- **Logic:** Pushes formatted status/trade messages; degrades gracefully (logs a warning, never raises) when the webhook is absent.
+
 ---
 
 ## 3. Infrastructure: The AWS Serverless Migration
@@ -46,7 +54,7 @@ GitHub Actions utilizes shared runners, resulting in unpredictable queue delays 
 
 ### 3.2 Execution Protocol
 - **Trigger:** AWS EventBridge replaces the `.yml` cron file, utilizing precise UTC cron syntax to execute precisely at market open and close.
-- **Environment:** The Lambda function utilizes a custom `.zip` dependency layer containing `pandas` and the `alpaca-trade-api` SDK to eliminate cold-boot installation delays.
+- **Environment:** The Lambda function utilizes a custom `.zip` dependency layer built from `requirements.txt`, containing `pandas` and the `alpaca-py` SDK (v0.43.2), to eliminate cold-boot installation delays. *(The codebase standardized on `alpaca-py`; the legacy `alpaca-trade-api` SDK is not used and must not be packaged.)*
 
 ---
 
@@ -64,8 +72,6 @@ To ensure accurate debugging of the new AWS infrastructure, the core mathematica
 
 ## 5. Implementation Roadmap
 
-1. **Phase 1 (Module Build):** Write `allocator.py` and `executioner.py` locally, porting the existing V3.0 logic into the new isolated class structures.
-2. **Phase 2 (AWS Pipeline):** Wrap the pipeline in `lambda_handler.py`, compile the Python dependency layer, and deploy the architecture to AWS Lambda.
-3. **Phase 3 (Live Paper Test):** Disable the GitHub Actions schedule and run the new AWS architecture on the Alpaca paper environment. The success metric is verifying that the bot executes the flat $5k allocations instantly without timeout errors.
-2. **Phase 2 (AWS Pipeline):** Wrap the pipeline in `lambda_handler.py`, compile the Python dependency layer, and deploy to AWS Lambda.
-3. **Phase 3 (Live Paper Test):** Disable the GitHub Actions schedule and run the new AWS architecture on the Alpaca paper environment to validate the exact-minute execution and dynamic share counts.
+1. **Phase 1 (Module Build):** ✅ Complete. `scanner.py`, `allocator.py`, `executioner.py`, and `notifier.py` built as isolated classes; `live_controller.py` thinned to pure orchestration; 36-test offline suite added and passing in CI.
+2. **Phase 2 (AWS Pipeline):** Wrap the pipeline in `aws/lambda_handler.py`, compile the `alpaca-py` dependency layer, and deploy to AWS Lambda.
+3. **Phase 3 (Live Paper Test):** Disable the GitHub Actions schedule, run the AWS architecture on Alpaca paper, and verify exact-minute execution of the flat $5k allocations without timeout errors.

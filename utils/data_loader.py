@@ -2,7 +2,13 @@ import os
 import pandas as pd
 import yfinance as yf
 
-DATA_DIR = "data"
+# On AWS Lambda the project dir is read-only; only /tmp is writable.
+# AWS sets AWS_LAMBDA_FUNCTION_NAME automatically, so we auto-switch there,
+# while local runs keep using ./data. Override explicitly with the DATA_DIR env var.
+DATA_DIR = os.getenv(
+    "DATA_DIR",
+    "/tmp/data" if os.getenv("AWS_LAMBDA_FUNCTION_NAME") else "data",
+)
 
 def fetch_data(ticker, start="2020-01-01", end="2026-03-30", force_download=False):
     os.makedirs(DATA_DIR, exist_ok=True)

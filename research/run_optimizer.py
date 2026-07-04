@@ -13,7 +13,7 @@ sys.path.append(parent_dir)
 from utils.data_loader import fetch_data
 from strategies.ma_rsi_combo import apply_combo_strategy
 from strategies.moving_average import apply_moving_average_strategy
-from engine.backtest import BacktestEngine
+from research.backtest import BacktestEngine
 
 def run_optimization(ticker, start_date, end_date, strategy="Combo", initial_equity=10000.0):
     print(f"\n⚙️ Starting {strategy} Optimizer for {ticker.upper()}...")

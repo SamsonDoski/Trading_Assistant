@@ -5,7 +5,7 @@ from utils.data_loader import fetch_data
 from strategies.ma_rsi_combo import apply_combo_strategy
 from strategies.moving_average import apply_moving_average_strategy
 from strategies.rsi import apply_rsi_strategy
-from engine.backtest import BacktestEngine
+from research.backtest import BacktestEngine
 from strategy_config import get_profile
 from utils.visualize1 import plot_combo_signals, plot_ma_signals, plot_rsi_signals # Assuming these exist
 

@@ -1,6 +1,6 @@
 import argparse
 from datetime import datetime, timedelta
-from engine.backtest import BacktestEngine
+from research.backtest import BacktestEngine
 import os
 import config
 from utils.data_loader import fetch_data
@@ -117,4 +117,9 @@ if __name__ == "__main__":
     main()
 
 
-# Good job! The main.py file is well-structured and integrates the data loading, strategy application, backtesting, and visualization components effectively. The use of argparse allows for flexible command-line interaction, making it easy to specify different tickers, date ranges, and initial equity. The backtest summary is printed in a clean format, and results are saved to a CSV file for further analysis. The plotting function provides a visual representation of the strategy's signals, enhancing the overall user experience.
+# Good job! The main.py file is well-structured and integrates the data loading, strategy application,
+# backtesting, and visualization components effectively. 
+# The use of argparse allows for flexible command-line interaction, making it easy to
+# specify different tickers, date ranges, and initial equity. The backtest summary is printed in a clean 
+# format, and results are saved to a CSV file for further analysis. The plotting function provides a visual 
+# representation of the strategy's signals, enhancing the overall user experience. 

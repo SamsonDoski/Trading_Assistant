@@ -20,3 +20,13 @@ sdist/
 var/
 wheels/
 pip-wheel-metadata/
+
+
+# AWS Lambda build artifacts
+lambda_layer/
+alpaca_layer.zip
+function.zip
+response.json
+
+# Credentials / key exports
+*.csv

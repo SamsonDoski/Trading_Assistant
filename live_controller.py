@@ -1,129 +1,105 @@
 import os
-import sys
-import requests
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
 
-# Import our local tools
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 from utils.profile_manager import load_profiles, is_stale
-from utils.data_loader import fetch_data
-from strategies.ma_rsi_combo import apply_combo_strategy
-
-# Load environment variables
-load_dotenv()
-API_KEY = os.getenv("ALPACA_API_KEY")
-SECRET_KEY = os.getenv("ALPACA_SECRET_KEY")
-
-# Initialize Alpaca (paper=True keeps us safe)
-trading_client = TradingClient(API_KEY, SECRET_KEY, paper=True)
-
-# 💰 Risk Management: How much cash to allocate per trade
-NOTIONAL_ALLOCATION = 5000.00 
-
-
-def send_notification(message):
-    webhook_url = os.getenv("DISCORD_WEBHOOK_URL")
-    if webhook_url:
-        payload = {"content": f"🤖 **Trading Update:** {message}"}
-        requests.post(webhook_url, json=payload)
-
+from utils.notifier import DiscordNotifier
+from engine.scanner import StrategyScanner
+from engine.allocator import PortfolioAllocator
+from engine.executioner import AlpacaExecutioner
 
 
 def run_live_pipeline():
-    print("🤖 V3.0 Live Controller Initialized...")
-    send_notification("🤖 Good Morning, Olajide. Running Trading Assistant Engine for the day...")
+    """
+    The True Controller: orchestrates the pipeline by passing data between
+    isolated micro-modules. It decides actions; the modules do the work.
+    """
+    load_dotenv()
+    print("⚙️ Initializing V3.1 True Controller...")
+
+    # 1. Wire up the micro-modules
+    notifier = DiscordNotifier()
+    scanner = StrategyScanner()
+    allocator = PortfolioAllocator()
+
+    api_key = os.getenv("ALPACA_API_KEY")
+    secret_key = os.getenv("ALPACA_SECRET_KEY")
+    executioner = AlpacaExecutioner(api_key, secret_key, paper=True)
+
+    # 2. Universe + tuned params come from profiles, not hardcoded lists
     profiles = load_profiles()
-    
-    # Get current positions from Alpaca so we don't double-buy
-    try:
-        open_positions = {pos.symbol: pos for pos in trading_client.get_all_positions()}
-    except Exception as e:
-        print(f"❌ Failed to connect to Alpaca: {e}")
+    if not profiles:
+        notifier.send_message("⚠️ No stock profiles found. Nothing to trade.")
         return
 
+    notifier.send_message(
+        "Good Morning, Olajide. Running Trading Assistant Engine for the day..."
+    )
+
+    # 3. Orchestration loop
     for ticker, rules in profiles.items():
-        # Start compiling a single message for this stock
-        log_msg = f"🔍 **{ticker}** | "
+        try:
+            if is_stale(ticker):
+                msg = f"🔍 **{ticker}** | ⚠️ Stale profile. Skipping."
+                print(msg)
+                notifier.send_message(msg)
+                continue
 
-        # 1. State Check
-        if is_stale(ticker):
-            log_msg += "⚠️ Stale profile. Skipping."
-            print(log_msg)
-            send_notification(log_msg)
-            continue
+            short_ma = rules["best_short_window"]
+            long_ma = rules["best_long_window"]
+            rsi_period = rules.get("rsi_period", 14)
 
-        short_ma = rules["best_short_window"]
-        long_ma = rules["best_long_window"]
-        rsi_period = rules.get("rsi_period", 14)
-        
-        log_msg += f"MA: {short_ma}/{long_ma} | "
+            # Step A: Scanner (the brain) does all the math
+            signals = scanner.get_signals(ticker, short_ma, long_ma, rsi_period)
+            if not signals:
+                msg = f"🔍 **{ticker}** | ❌ Data fetch failed."
+                print(msg)
+                notifier.send_message(msg)
+                continue
 
-        # 2. Fetch Data (WITH THE NEW CALENDAR BUFFER FIX)
-        end_date = datetime.now().strftime("%Y-%m-%d")
-        start_date = (datetime.now() - timedelta(days=(long_ma * 2) + 365)).strftime("%Y-%m-%d")
+            latest_signal = signals["latest_signal"]
+            previous_signal = signals["previous_signal"]
+            price = signals["current_price"]
+            rsi = signals["current_rsi"]
 
-        df = fetch_data(ticker, start_date, end_date)
-        if df.empty:
-            log_msg += "❌ Data fetch failed."
-            print(log_msg)
-            send_notification(log_msg)
-            continue
+            # Step B: Executioner reports state (no raw SDK objects leak in here)
+            holding = executioner.is_holding(ticker)
 
-        # 3. Calculate Live Strategy Signals
-        df_signal = apply_combo_strategy(df, short_window=short_ma, long_window=long_ma, rsi_window=rsi_period)
+            # Step C: State machine — this is the controller's real job
+            if latest_signal == 1 and previous_signal == 0 and not holding:
+                qty = allocator.calculate_shares(price)
+                executioner.execute_market_buy(ticker, qty)
+                state_msg = f"🚀 BUY EXECUTED: {qty} shares @ ${price:.2f}"
 
+            elif latest_signal == 0 and holding:
+                pl = executioner.get_unrealized_pl_pct(ticker)
+                executioner.liquidate_position(ticker)
+                state_msg = f"🛑 SELL EXECUTED (Liquidated) (P/L: {pl:+.2f}%)"
 
-        latest_signal = df_signal.iloc[-2]['Signal']
-        previous_signal = df_signal.iloc[-3]['Signal']
-        current_price = df_signal.iloc[-2]['Close']
-        current_rsi = df_signal.iloc[-2]['RSI']
-        
-        log_msg += f"Price: ${current_price:.2f} | RSI: {current_rsi:.1f} | Sig: {latest_signal} | "
+            elif latest_signal == 1 and holding:
+                pl = executioner.get_unrealized_pl_pct(ticker)
+                state_msg = f"⏳ Holding (P/L: {pl:+.2f}%)"
 
-        # 4. Execution Switchboard
-        already_owned = ticker in open_positions
+            elif latest_signal == 1 and previous_signal == 1 and not holding:
+                state_msg = "⏳ Trend positive but missed RSI dip. Waiting for next RSI reset."
 
-        if latest_signal == 1 and previous_signal == 0 and not already_owned:
-            action_msg = f"🚀 **BUY EXECUTED** (${NOTIONAL_ALLOCATION})"
-            
-            order_data = MarketOrderRequest(
-                symbol=ticker,
-                notional=NOTIONAL_ALLOCATION,
-                side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY
+            else:
+                state_msg = "⏳ Waiting, Trend negative or RSI is high."
+
+            # Step D: Notifier announces the result
+            log_msg = (
+                f"🔍 **{ticker}** | MA: {short_ma}/{long_ma} | "
+                f"Price: ${price:.2f} | RSI: {rsi:.1f} | Sig: {latest_signal} | {state_msg}"
             )
-            trading_client.submit_order(order_data=order_data)
-            log_msg += action_msg
-            
-        elif latest_signal == 0 and already_owned:
-            action_msg = "🛑 **SELL EXECUTED** (Liquidated)"
-            closing_pl = float(open_positions[ticker].unrealized_plpc) * 100
-            trading_client.close_position(ticker)
-            log_msg += action_msg
-            log_msg += f" (P/L: {closing_pl:+.2f}%)"
-            
-        elif latest_signal == 1 and already_owned:
-            # Add live P/L tracking to the hold message
-            current_pl = float(open_positions[ticker].unrealized_plpc) * 100
-            log_msg += f"⏳ Holding (P/L: {current_pl:+.2f}%)"
-            
-        elif latest_signal == 0 and not already_owned:
-            log_msg += "⏳ Waiting, Trend negative or RSI is high."
+            print(log_msg)
+            notifier.send_message(log_msg)
 
-        # This catches the "Chasing" scenario
-        elif latest_signal == 1 and previous_signal == 1 and not already_owned:
-            log_msg += "⏳ Trend positive but missed RSI dip. Waiting for next RSI reset."
+        except Exception as e:
+            err = f"❌ Pipeline error on {ticker}: {e}"
+            print(err)
+            notifier.send_message(err)
 
-        # 5. Send ONE clean ping to Discord per stock
-        print(log_msg)
-        send_notification(log_msg)
-            
-            
+    print("✅ V3.1 Pipeline Execution Complete.")
+
 
 if __name__ == "__main__":
     run_live_pipeline()
-

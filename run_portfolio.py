@@ -2,7 +2,7 @@
 import argparse
 import os
 import config
-from engine.portfolio import PortfolioSimulator
+from research.portfolio import PortfolioSimulator
 
 def main():
     # CLI argument parser for the portfolio

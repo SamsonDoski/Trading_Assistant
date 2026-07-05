@@ -7,7 +7,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.profile_manager import load_profiles, save_profiles, is_stale
 
 # --- IMPORT ACTUAL V2 OPTIMIZER ---
-from engine.run_optimizer import run_optimization 
+from research.run_optimizer import run_optimization 
 
 def update_profile(ticker, best_short, best_long, rsi_period=14):
     """Saves the newly discovered optimized parameters to the JSON file."""

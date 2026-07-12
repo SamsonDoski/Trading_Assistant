@@ -205,6 +205,7 @@ class TestNotifier:
         import utils.notifier as nm
         seen = {}
         class FakeResp:
+            status_code = 200
             def raise_for_status(self): pass
         def fake_post(url, json=None, **k):
             seen["url"], seen["json"] = url, json

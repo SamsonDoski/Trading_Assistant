@@ -6,6 +6,7 @@ from utils.notifier import DiscordNotifier
 from engine.scanner import StrategyScanner
 from engine.allocator import PortfolioAllocator
 from engine.executioner import AlpacaExecutioner
+from config import TRAILING_STOP_PERCENT
 
 
 def run_live_pipeline():
@@ -97,6 +98,17 @@ def run_live_pipeline():
             err = f"❌ Pipeline error on {ticker}: {e}"
             print(err)
             notifier.send_message(err)
+
+    # 4. Protection pass — ensure every open position carries a broker-side
+    #    trailing stop. Runs AFTER the entry loop and re-reads state so fills
+    #    from this session are included.
+    executioner.refresh_positions()
+    executioner.refresh_open_orders()
+    for ticker in executioner.held_symbols():
+        if executioner.ensure_trailing_stop(ticker, TRAILING_STOP_PERCENT):
+            msg = f"🛡️ **{ticker}** | Trailing stop {TRAILING_STOP_PERCENT}% attached."
+            print(msg)
+            notifier.send_message(msg)
 
     print("✅ V3.1 Pipeline Execution Complete.")
 

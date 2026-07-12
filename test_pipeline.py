@@ -215,24 +215,37 @@ class TestNotifier:
         assert "ping" in seen["json"]["content"]
 
 
-# ================================================================ NEW: executioner
+# ================================================================ NEW: AlpacaExecutioner (TradingClient mocked, no SDK calls out)
 class TestExecutioner:
     @staticmethod
-    def _client_cls(positions):
+    def _client_cls(positions, open_order_symbols=()):
+        """positions: {symbol: (unrealized_plpc, qty)}; open_order_symbols: symbols
+        that already have a live order (so trailing-stop dedup can be tested)."""
         class FakePos:
-            def __init__(self, s, p): self.symbol, self.unrealized_plpc = s, p
+            def __init__(self, sym, plpc, qty):
+                self.symbol, self.unrealized_plpc, self.qty = sym, plpc, qty
+        class FakeOrder:
+            def __init__(self, sym, oid):
+                self.symbol, self.id = sym, oid
         class FakeClient:
             def __init__(self, *a, **k):
-                self.submitted, self.closed = [], []
-                self._pos = [FakePos(s, p) for s, p in positions.items()]
+                self.submitted, self.closed, self.canceled = [], [], []
+                self._pos = [FakePos(s, plpc, qty) for s, (plpc, qty) in positions.items()]
+                self._orders = [FakeOrder(s, f"oid-{s}") for s in open_order_symbols]
             def get_all_positions(self): return self._pos
+            def get_orders(self, filter=None):
+                syms = getattr(filter, "symbols", None)
+                if syms:
+                    return [o for o in self._orders if o.symbol in syms]
+                return list(self._orders)
             def submit_order(self, order_data=None): self.submitted.append(order_data)
             def close_position(self, symbol): self.closed.append(symbol)
+            def cancel_order_by_id(self, order_id): self.canceled.append(order_id)
         return FakeClient
 
     def test_state_and_orders(self, monkeypatch):
         import engine.executioner as em
-        monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": "0.05"}))
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": ("0.05", "10")}))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
         assert ex.is_holding("AAPL") is True
         assert ex.is_holding("MSFT") is False
@@ -245,24 +258,71 @@ class TestExecutioner:
         ex.liquidate_position("AAPL")
         assert ex.api.closed == ["AAPL"]
 
+    def test_held_symbols(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.05", "10"), "MU": ("0.1", "3")}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert set(ex.held_symbols()) == {"AAPL", "MU"}
 
-# ================================================================ NEW: controller
+    def test_trailing_stop_attached_when_unprotected(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": ("0.05", "10")}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.ensure_trailing_stop("AAPL", 8.0) is True
+        assert len(ex.api.submitted) == 1            # a trailing stop was placed
+        assert "AAPL" in ex._open_order_symbols       # cached so we don't stack
+        assert ex.ensure_trailing_stop("AAPL", 8.0) is False   # now a no-op
+        assert len(ex.api.submitted) == 1
+
+    def test_trailing_stop_skipped_when_already_protected(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.05", "10")}, open_order_symbols=["AAPL"]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.ensure_trailing_stop("AAPL", 8.0) is False
+        assert ex.api.submitted == []                 # nothing placed
+
+    def test_trailing_stop_skipped_when_not_held(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": ("0.05", "10")}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.ensure_trailing_stop("MSFT", 8.0) is False
+
+    def test_liquidate_cancels_open_orders_first(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.05", "10")}, open_order_symbols=["AAPL"]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        ex.liquidate_position("AAPL")
+        assert ex.api.canceled == ["oid-AAPL"]        # cancelled the protective stop...
+        assert ex.api.closed == ["AAPL"]              # ...then closed the position
+
+
+# ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
 class TestControllerOrchestration:
     def _wire(self, monkeypatch, signals, held):
         import live_controller as lc
         class FakeScanner:
             def get_signals(self, *a, **k): return signals
         class FakeAllocator:
-            def calculate_shares(self, price): return 42.0
+            def calculate_shares(self, price): return 42
         class FakeNotifier:
             def __init__(self): self.msgs = []
             def send_message(self, m): self.msgs.append(m)
         class FakeExec:
-            def __init__(self, *a, **k): self.buys, self.sells = [], []
+            def __init__(self, *a, **k):
+                self.buys, self.sells, self.stops = [], [], []
             def is_holding(self, t): return held
             def get_unrealized_pl_pct(self, t): return 3.0
             def execute_market_buy(self, t, q): self.buys.append((t, q))
             def liquidate_position(self, t): self.sells.append(t)
+            # --- new protection-pass surface (Step 4 in the controller) ---
+            def refresh_positions(self): pass
+            def refresh_open_orders(self): pass
+            def held_symbols(self): return ["AAPL"] if held else []
+            def ensure_trailing_stop(self, t, pct):
+                self.stops.append((t, pct)); return True
         holder = {}
         monkeypatch.setattr(lc, "load_profiles", lambda: {
             "AAPL": {"best_short_window": 5, "best_long_window": 20, "rsi_period": 14}})
@@ -279,7 +339,7 @@ class TestControllerOrchestration:
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
             "current_price": 200.0, "current_rsi": 40.0}, held=False)
         lc.run_live_pipeline()
-        assert h["exec"].buys == [("AAPL", 42.0)] and h["exec"].sells == []
+        assert h["exec"].buys == [("AAPL", 42)] and h["exec"].sells == []
 
     def test_sell_when_trend_dies(self, monkeypatch):
         lc, h = self._wire(monkeypatch, {"latest_signal": 0, "previous_signal": 1,
@@ -298,6 +358,12 @@ class TestControllerOrchestration:
             "current_price": 200.0, "current_rsi": 70.0}, held=False)
         lc.run_live_pipeline()
         assert h["exec"].buys == []
+
+    def test_protection_pass_attaches_trailing_stop(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 50.0}, held=True)
+        lc.run_live_pipeline()
+        assert h["exec"].stops == [("AAPL", lc.TRAILING_STOP_PERCENT)]
 
 
 # ================================================================ NEW: profile_manager

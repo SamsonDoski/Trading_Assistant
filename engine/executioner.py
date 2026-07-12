@@ -1,13 +1,19 @@
 from alpaca.trading.client import TradingClient
-from alpaca.trading.requests import MarketOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.requests import (
+    MarketOrderRequest,
+    TrailingStopOrderRequest,
+    GetOrdersRequest,
+)
+from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
 
 
 class AlpacaExecutioner:
     def __init__(self, api_key, secret_key, paper=True):
         self.api = TradingClient(api_key, secret_key, paper=paper)
         self._positions = {}
+        self._open_order_symbols = set()
         self.refresh_positions()
+        self.refresh_open_orders()
 
     def refresh_positions(self):
         """Snapshot all open positions once, so we don't hit the API per ticker."""
@@ -18,9 +24,24 @@ class AlpacaExecutioner:
             self._positions = {}
         return self._positions
 
+    def refresh_open_orders(self):
+        """Snapshot which symbols already have an open (unfilled) order, so we
+        never stack a second trailing stop on an already-protected position."""
+        try:
+            req = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+            self._open_order_symbols = {o.symbol for o in self.api.get_orders(filter=req)}
+        except Exception as e:
+            print(f"❌ Failed to fetch open orders: {e}")
+            self._open_order_symbols = set()
+        return self._open_order_symbols
+
     def is_holding(self, ticker):
         """True if we currently own the asset. Controller uses this, not raw objects."""
         return ticker in self._positions
+
+    def held_symbols(self):
+        """Public list of currently-held symbols (keeps _positions private)."""
+        return list(self._positions.keys())
 
     def get_unrealized_pl_pct(self, ticker):
         """Unrealized P/L as a percent, or None if not held."""
@@ -30,7 +51,7 @@ class AlpacaExecutioner:
         return float(pos.unrealized_plpc) * 100
 
     def execute_market_buy(self, ticker, qty):
-        """Submits a fractional-share market buy for the qty the allocator sized."""
+        """Submits a whole-share market buy for the qty the allocator sized."""
         if qty is None or qty <= 0:
             return
         try:
@@ -45,10 +66,51 @@ class AlpacaExecutioner:
         except Exception as e:
             print(f"❌ Failed to execute BUY for {ticker}: {e}")
 
-    def liquidate_position(self, ticker):
-        """Closes the entire position — avoids the string-qty pitfall of the old SDK."""
+    def ensure_trailing_stop(self, ticker, trail_percent):
+        """Attach a broker-side trailing stop to a held position that lacks one.
+        The trail distance also serves as the hard stop at entry (trail% below
+        the fill). Returns True only if a new stop was actually submitted."""
+        pos = self._positions.get(ticker)
+        if pos is None:
+            return False
+        if ticker in self._open_order_symbols:
+            return False  # already protected — don't stack orders
+        qty = int(float(pos.qty))  # advanced orders require whole shares
+        if qty <= 0:
+            return False
         try:
+            order = TrailingStopOrderRequest(
+                symbol=ticker,
+                qty=qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.GTC,
+                trail_percent=trail_percent,
+            )
+            self.api.submit_order(order_data=order)
+            self._open_order_symbols.add(ticker)
+            print(f"🛡️ Trailing stop {trail_percent}% set on {ticker} ({qty} shares)")
+            return True
+        except Exception as e:
+            print(f"❌ Failed to set trailing stop for {ticker}: {e}")
+            return False
+
+    def liquidate_position(self, ticker):
+        """Closes the entire position. Cancels any protective stop first so the
+        shares aren't locked by an open order when we close."""
+        try:
+            self._cancel_open_orders_for(ticker)
             self.api.close_position(ticker)
             print(f"🛑 Executed SELL (Liquidated) {ticker}")
         except Exception as e:
             print(f"❌ Failed to liquidate {ticker}: {e}")
+
+    def _cancel_open_orders_for(self, ticker):
+        """Cancel any open orders on a symbol (e.g., its trailing stop) so the
+        position can be closed cleanly."""
+        try:
+            req = GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[ticker])
+            for o in self.api.get_orders(filter=req):
+                self.api.cancel_order_by_id(o.id)
+            self._open_order_symbols.discard(ticker)
+        except Exception as e:
+            print(f"⚠️ Could not cancel open orders for {ticker}: {e}")

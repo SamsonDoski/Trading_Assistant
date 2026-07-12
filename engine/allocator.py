@@ -4,15 +4,16 @@ class PortfolioAllocator:
         self.flat_allocation_usd = 5000.00
 
     def calculate_shares(self, current_price):
-        """Fractional shares needed to hit the flat allocation for one ticker."""
+        """Whole shares that fit within the flat allocation. Broker-native stop
+        orders cannot attach to fractional qty, so we floor to an integer."""
         if current_price is None or current_price <= 0:
-            return 0.0
-        return round(self.flat_allocation_usd / current_price, 9)
+            return 0
+        return int(self.flat_allocation_usd // current_price)
 
     def generate_buy_orders(self, approved_signals, current_prices):
         """
         Takes a list of tickers with a '1.0' Buy signal and calculates
-        the exact fractional share count needed to hit the target allocation.
+        the whole-share count needed to approach the target allocation.
         """
         orders = {}
         for ticker in approved_signals:

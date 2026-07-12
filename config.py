@@ -14,6 +14,11 @@ SHORT_MA = 7
 LONG_MA = 30
 
 # -----------------
+# Risk Management
+# -----------------
+TRAILING_STOP_PERCENT = 8.0  # Broker-side trailing stop; also the hard stop at entry (8% below fill)
+
+# -----------------
 # Backtest Settings
 # -----------------
 INITIAL_EQUITY = 10000

@@ -36,6 +36,13 @@ def run_live_pipeline():
         "Good Morning, Olajide. Running Trading Assistant Engine for the day..."
     )
 
+    # Running budget for this session — sized against real buying power so we
+    # never submit an order Alpaca would bounce for insufficient funds.
+    budget = executioner.get_buying_power()
+    bp_msg = f"💰 Buying power available: ${budget:,.2f}"
+    print(bp_msg)
+    notifier.send_message(bp_msg)
+
     # 3. Orchestration loop
     for ticker, rules in profiles.items():
         try:
@@ -65,11 +72,15 @@ def run_live_pipeline():
             # Step B: Executioner reports state (no raw SDK objects leak in here)
             holding = executioner.is_holding(ticker)
 
-            # Step C: State machine — this is the controller's real job
+           # Step C: State machine — this is the controller's real job
             if latest_signal == 1 and previous_signal == 0 and not holding:
-                qty = allocator.calculate_shares(price)
-                executioner.execute_market_buy(ticker, qty)
-                state_msg = f"🚀 BUY EXECUTED: {qty} shares @ ${price:.2f}"
+                qty = allocator.calculate_shares(price, budget)
+                if qty > 0:
+                    executioner.execute_market_buy(ticker, qty)
+                    budget -= qty * price              # spend from the running budget
+                    state_msg = f"🚀 BUY EXECUTED: {qty} shares @ ${price:.2f} (BP left: ${budget:,.0f})"
+                else:
+                    state_msg = "⏸️ BUY signal — skipped, insufficient buying power."
 
             elif latest_signal == 0 and holding:
                 pl = executioner.get_unrealized_pl_pct(ticker)

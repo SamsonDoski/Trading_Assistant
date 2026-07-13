@@ -49,6 +49,16 @@ class AlpacaExecutioner:
         if pos is None:
             return None
         return float(pos.unrealized_plpc) * 100
+    
+    def get_buying_power(self):
+        """Cash available to buy WITHOUT using margin — prevents order bounces
+        and keeps the long-only bot from silently leveraging. 0.0 on failure."""
+        try:
+            account = self.api.get_account()
+            return float(account.non_marginable_buying_power)
+        except Exception as e:
+            print(f"❌ Failed to fetch buying power: {e}")
+            return 0.0
 
     def execute_market_buy(self, ticker, qty):
         """Submits a whole-share market buy for the qty the allocator sized."""

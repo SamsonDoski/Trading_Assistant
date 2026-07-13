@@ -162,7 +162,11 @@ class TestAllocator:
     def test_calculate_shares(self):
         from engine.allocator import PortfolioAllocator
         a = PortfolioAllocator()
-        assert a.calculate_shares(200.0) == 25.0
+        assert a.calculate_shares(200.0) == 25
+        # no cap -> full $5k
+        assert a.calculate_shares(200.0, buying_power=3000) == 15  # capped to $3k
+        assert a.calculate_shares(200.0, buying_power=100) == 0    # can't afford one share
+        assert a.calculate_shares(200.0, buying_power=0) == 0
         assert a.calculate_shares(0) == 0.0
         assert a.calculate_shares(None) == 0.0
 
@@ -219,21 +223,22 @@ class TestNotifier:
 # ================================================================ NEW: AlpacaExecutioner (TradingClient mocked, no SDK calls out)
 class TestExecutioner:
     @staticmethod
-    def _client_cls(positions, open_order_symbols=()):
-        """positions: {symbol: (unrealized_plpc, qty)}; open_order_symbols: symbols
-        that already have a live order (so trailing-stop dedup can be tested)."""
+    def _client_cls(positions, open_order_symbols=(), buying_power="100000"):
         class FakePos:
             def __init__(self, sym, plpc, qty):
                 self.symbol, self.unrealized_plpc, self.qty = sym, plpc, qty
         class FakeOrder:
             def __init__(self, sym, oid):
                 self.symbol, self.id = sym, oid
+        class FakeAccount:
+            def __init__(self): self.non_marginable_buying_power = buying_power
         class FakeClient:
             def __init__(self, *a, **k):
                 self.submitted, self.closed, self.canceled = [], [], []
                 self._pos = [FakePos(s, plpc, qty) for s, (plpc, qty) in positions.items()]
                 self._orders = [FakeOrder(s, f"oid-{s}") for s in open_order_symbols]
             def get_all_positions(self): return self._pos
+            def get_account(self): return FakeAccount()
             def get_orders(self, filter=None):
                 syms = getattr(filter, "symbols", None)
                 if syms:
@@ -243,6 +248,13 @@ class TestExecutioner:
             def close_position(self, symbol): self.closed.append(symbol)
             def cancel_order_by_id(self, order_id): self.canceled.append(order_id)
         return FakeClient
+    
+    def test_get_buying_power(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({}, buying_power="12345.67"))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.get_buying_power() == pytest.approx(12345.67)
 
     def test_state_and_orders(self, monkeypatch):
         import engine.executioner as em
@@ -302,12 +314,15 @@ class TestExecutioner:
 
 # ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
 class TestControllerOrchestration:
-    def _wire(self, monkeypatch, signals, held):
+    def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0):
         import live_controller as lc
         class FakeScanner:
             def get_signals(self, *a, **k): return signals
         class FakeAllocator:
-            def calculate_shares(self, price): return 42
+            def calculate_shares(self, price, buying_power=None):
+                if buying_power is not None and buying_power < price:
+                    return 0
+                return 42
         class FakeNotifier:
             def __init__(self): self.msgs = []
             def send_message(self, m): self.msgs.append(m)
@@ -316,9 +331,9 @@ class TestControllerOrchestration:
                 self.buys, self.sells, self.stops = [], [], []
             def is_holding(self, t): return held
             def get_unrealized_pl_pct(self, t): return 3.0
+            def get_buying_power(self): return buying_power
             def execute_market_buy(self, t, q): self.buys.append((t, q))
             def liquidate_position(self, t): self.sells.append(t)
-            # --- new protection-pass surface (Step 4 in the controller) ---
             def refresh_positions(self): pass
             def refresh_open_orders(self): pass
             def held_symbols(self): return ["AAPL"] if held else []
@@ -365,6 +380,13 @@ class TestControllerOrchestration:
             "current_price": 200.0, "current_rsi": 50.0}, held=True)
         lc.run_live_pipeline()
         assert h["exec"].stops == [("AAPL", lc.TRAILING_STOP_PERCENT)]
+
+
+    def test_buy_skipped_when_insufficient_buying_power(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False, buying_power=50.0)
+        lc.run_live_pipeline()
+        assert h["exec"].buys == []
 
 
 # ================================================================ NEW: profile_manager

@@ -43,6 +43,12 @@ def run_live_pipeline():
     print(bp_msg)
     notifier.send_message(bp_msg)
 
+    # Report any positions the broker stopped out while we were asleep.
+    for symbol, qty, fill_price in executioner.get_recent_stopouts(hours=24):
+        so_msg = f"🛑 STOPPED OUT: {symbol} — {qty} shares @ ${float(fill_price):.2f} (trailing stop filled)"
+        print(so_msg)
+        notifier.send_message(so_msg)
+
     # 3. Orchestration loop
     for ticker, rules in profiles.items():
         try:

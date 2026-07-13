@@ -223,13 +223,17 @@ class TestNotifier:
 # ================================================================ NEW: AlpacaExecutioner (TradingClient mocked, no SDK calls out)
 class TestExecutioner:
     @staticmethod
-    def _client_cls(positions, open_order_symbols=(), buying_power="100000"):
+    def _client_cls(positions, open_order_symbols=(), buying_power="100000", closed_stopouts=()):
         class FakePos:
             def __init__(self, sym, plpc, qty):
                 self.symbol, self.unrealized_plpc, self.qty = sym, plpc, qty
         class FakeOrder:
             def __init__(self, sym, oid):
                 self.symbol, self.id = sym, oid
+        class FakeClosed:
+            def __init__(self, sym, qty, price):
+                self.symbol, self.filled_qty, self.filled_avg_price = sym, qty, price
+                self.order_type, self.status = "trailing_stop", "filled"
         class FakeAccount:
             def __init__(self): self.non_marginable_buying_power = buying_power
         class FakeClient:
@@ -237,9 +241,12 @@ class TestExecutioner:
                 self.submitted, self.closed, self.canceled = [], [], []
                 self._pos = [FakePos(s, plpc, qty) for s, (plpc, qty) in positions.items()]
                 self._orders = [FakeOrder(s, f"oid-{s}") for s in open_order_symbols]
+                self._closed = [FakeClosed(*c) for c in closed_stopouts]
             def get_all_positions(self): return self._pos
             def get_account(self): return FakeAccount()
             def get_orders(self, filter=None):
+                if "closed" in str(getattr(filter, "status", "")).lower():
+                    return list(self._closed)
                 syms = getattr(filter, "symbols", None)
                 if syms:
                     return [o for o in self._orders if o.symbol in syms]
@@ -311,6 +318,13 @@ class TestExecutioner:
         assert ex.api.canceled == ["oid-AAPL"]        # cancelled the protective stop...
         assert ex.api.closed == ["AAPL"]              # ...then closed the position
 
+    def test_get_recent_stopouts(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({}, closed_stopouts=[("MU", "8", "985.20")]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.get_recent_stopouts(hours=24) == [("MU", "8", "985.20")]
+
 
 # ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
 class TestControllerOrchestration:
@@ -337,6 +351,7 @@ class TestControllerOrchestration:
             def refresh_positions(self): pass
             def refresh_open_orders(self): pass
             def held_symbols(self): return ["AAPL"] if held else []
+            def get_recent_stopouts(self, hours=24): return []
             def ensure_trailing_stop(self, t, pct):
                 self.stops.append((t, pct)); return True
         holder = {}

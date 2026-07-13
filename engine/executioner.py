@@ -1,3 +1,4 @@
+from datetime import datetime, timezone, timedelta
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
@@ -124,3 +125,21 @@ class AlpacaExecutioner:
             self._open_order_symbols.discard(ticker)
         except Exception as e:
             print(f"⚠️ Could not cancel open orders for {ticker}: {e}")
+
+    def get_recent_stopouts(self, hours=24):
+        """Filled trailing-stop SELL orders in the last `hours` — positions the
+        broker closed while the bot was asleep. Returns [(symbol, qty, avg_price)]."""
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        try:
+            req = GetOrdersRequest(status=QueryOrderStatus.CLOSED, after=since, limit=200)
+            orders = self.api.get_orders(filter=req)
+        except Exception as e:
+            print(f"❌ Failed to fetch recent orders: {e}")
+            return []
+        stopouts = []
+        for o in orders:
+            otype = str(getattr(o, "order_type", "") or "").lower()
+            status = str(o.status).lower()
+            if "trailing_stop" in otype and "filled" in status:
+                stopouts.append((o.symbol, o.filled_qty, o.filled_avg_price))
+        return stopouts

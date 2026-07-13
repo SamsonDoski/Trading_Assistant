@@ -414,6 +414,73 @@ class TestDataLoader:
         assert dl.fetch_data("NOPE", start="2020-01-01", end="2020-04-01").empty
 
 
+# ================================================================ NEW: Alpaca data source (StockHistoricalDataClient mocked)
+class TestAlpacaData:
+    @staticmethod
+    def _fake_client(df, raise_exc=None):
+        class FakeBars:
+            def __init__(self, d): self.df = d
+        class FakeClient:
+            def __init__(self): self.requests = []
+            def get_stock_bars(self, request):
+                self.requests.append(request)
+                if raise_exc:
+                    raise raise_exc
+                return FakeBars(df)
+        return FakeClient()
+
+    @staticmethod
+    def _alpaca_df(ticker, n=50):
+        """Mimics alpaca-py's bars.df: MultiIndex (symbol, timestamp[UTC]) with
+        lowercase OHLCV columns."""
+        idx = pd.MultiIndex.from_product(
+            [[ticker], pd.date_range("2024-01-01", periods=n, freq="D", tz="UTC")],
+            names=["symbol", "timestamp"],
+        )
+        return pd.DataFrame({
+            "open": np.linspace(100, 150, n),
+            "high": np.linspace(101, 151, n),
+            "low": np.linspace(99, 149, n),
+            "close": np.linspace(100, 150, n),
+            "volume": np.arange(n, dtype=float),
+        }, index=idx)
+
+    def test_returns_normalized_frame(self, monkeypatch):
+        import utils.alpaca_data as ad
+        monkeypatch.setattr(ad, "_get_client",
+                            lambda: self._fake_client(self._alpaca_df("AAPL", 50)))
+        out = ad.fetch_data("AAPL", start="2024-01-01", end="2024-03-01")
+        assert not out.empty
+        assert "Close" in out.columns          # lowercase 'close' -> 'Close'
+        assert len(out) == 50
+        assert out.index.name == "Date"
+        assert isinstance(out.index, pd.DatetimeIndex)
+        assert out.index.tz is None             # tz stripped to match yfinance
+
+    def test_empty_response_returns_empty(self, monkeypatch):
+        import utils.alpaca_data as ad
+        monkeypatch.setattr(ad, "_get_client", lambda: self._fake_client(pd.DataFrame()))
+        assert ad.fetch_data("AAPL", "2024-01-01", "2024-02-01").empty
+
+    def test_api_error_returns_empty(self, monkeypatch):
+        import utils.alpaca_data as ad
+        monkeypatch.setattr(ad, "_get_client",
+                            lambda: self._fake_client(None, raise_exc=RuntimeError("api down")))
+        assert ad.fetch_data("AAPL", "2024-01-01", "2024-02-01").empty
+
+    def test_output_feeds_combo_strategy(self, monkeypatch):
+        # Proves the Alpaca frame is a true drop-in: it flows through the exact
+        # strategy the live scanner runs, producing Signal/RSI columns.
+        import utils.alpaca_data as ad
+        from strategies.ma_rsi_combo import apply_combo_strategy
+        monkeypatch.setattr(ad, "_get_client",
+                            lambda: self._fake_client(self._alpaca_df("AAPL", 300)))
+        out = ad.fetch_data("AAPL")
+        result = apply_combo_strategy(out, short_window=5, long_window=20, rsi_window=14)
+        assert "Signal" in result.columns and "RSI" in result.columns
+        assert set(result["Signal"].dropna().unique()).issubset({0, 1})
+
+
 # ================================================================ OLD: researcher
 class TestResearcher:
     def test_update_profile_writes_combo(self, monkeypatch):

@@ -361,6 +361,7 @@ class TestControllerOrchestration:
         monkeypatch.setattr(lc, "StrategyScanner", FakeScanner)
         monkeypatch.setattr(lc, "PortfolioAllocator", FakeAllocator)
         monkeypatch.setattr(lc, "DiscordNotifier", FakeNotifier)
+        monkeypatch.setattr(lc.time, "sleep", lambda *a, **k: None)
         def make_exec(*a, **k):
             holder["exec"] = FakeExec(); return holder["exec"]
         monkeypatch.setattr(lc, "AlpacaExecutioner", make_exec)

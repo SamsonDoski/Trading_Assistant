@@ -10,7 +10,12 @@ class BacktestEngine:
         df = df.copy()
         df["Position"] = df["Signal"].shift(1).fillna(0)  # Enter after signal
         df["Returns"] = df["Close"].pct_change().fillna(0)
-        df["Strategy_Returns"] = df["Returns"] * df["Position"]
+
+        # Charge slippage on each fill; fillna(0) so the first row doesn't poison cumprod.
+        df["Trade"] = df["Position"].diff().abs().fillna(0)
+        df["Strategy_Returns"] = df["Returns"] * df["Position"] - df["Trade"] * self.slippage
+
+
         df["Equity"] = (1 + df["Strategy_Returns"]).cumprod() * self.initial_equity
         return df
 

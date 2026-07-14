@@ -1,4 +1,5 @@
 import os
+import time
 from dotenv import load_dotenv
 
 from utils.profile_manager import load_profiles, is_stale
@@ -6,6 +7,7 @@ from utils.notifier import DiscordNotifier
 from engine.scanner import StrategyScanner
 from engine.allocator import PortfolioAllocator
 from engine.executioner import AlpacaExecutioner
+from config import TRAILING_STOP_PERCENT
 
 
 def run_live_pipeline():
@@ -34,6 +36,19 @@ def run_live_pipeline():
     notifier.send_message(
         "Good Morning, Olajide. Running Trading Assistant Engine for the day..."
     )
+
+    # Running budget for this session — sized against real buying power so we
+    # never submit an order Alpaca would bounce for insufficient funds.
+    budget = executioner.get_buying_power()
+    bp_msg = f"💰 Buying power available: ${budget:,.2f}"
+    print(bp_msg)
+    notifier.send_message(bp_msg)
+
+    # Report any positions the broker stopped out while we were asleep.
+    for symbol, qty, fill_price in executioner.get_recent_stopouts(hours=24):
+        so_msg = f"🛑 STOPPED OUT: {symbol} — {qty} shares @ ${float(fill_price):.2f} (trailing stop filled)"
+        print(so_msg)
+        notifier.send_message(so_msg)
 
     # 3. Orchestration loop
     for ticker, rules in profiles.items():
@@ -64,11 +79,15 @@ def run_live_pipeline():
             # Step B: Executioner reports state (no raw SDK objects leak in here)
             holding = executioner.is_holding(ticker)
 
-            # Step C: State machine — this is the controller's real job
+           # Step C: State machine — this is the controller's real job
             if latest_signal == 1 and previous_signal == 0 and not holding:
-                qty = allocator.calculate_shares(price)
-                executioner.execute_market_buy(ticker, qty)
-                state_msg = f"🚀 BUY EXECUTED: {qty} shares @ ${price:.2f}"
+                qty = allocator.calculate_shares(price, budget)
+                if qty > 0:
+                    executioner.execute_market_buy(ticker, qty)
+                    budget -= qty * price              # spend from the running budget
+                    state_msg = f"🚀 BUY EXECUTED: {qty} shares @ ${price:.2f} (BP left: ${budget:,.0f})"
+                else:
+                    state_msg = "⏸️ BUY signal — skipped, insufficient buying power."
 
             elif latest_signal == 0 and holding:
                 pl = executioner.get_unrealized_pl_pct(ticker)
@@ -97,6 +116,18 @@ def run_live_pipeline():
             err = f"❌ Pipeline error on {ticker}: {e}"
             print(err)
             notifier.send_message(err)
+
+    # 4. Protection pass — ensure every open position carries a broker-side
+    #    trailing stop. Pause first so market-open fills for THIS run's buys
+    #    settle and get protected now, instead of waiting until tomorrow.
+    time.sleep(10)  # Pause for 10 seconds
+    executioner.refresh_positions()
+    executioner.refresh_open_orders()
+    for ticker in executioner.held_symbols():
+        if executioner.ensure_trailing_stop(ticker, TRAILING_STOP_PERCENT):
+            msg = f"🛡️ **{ticker}** | Trailing stop {TRAILING_STOP_PERCENT}% attached."
+            print(msg)
+            notifier.send_message(msg)
 
     print("✅ V3.1 Pipeline Execution Complete.")
 

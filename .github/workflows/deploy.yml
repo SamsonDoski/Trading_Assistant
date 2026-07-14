@@ -1,0 +1,45 @@
+name: Deploy to Lambda
+
+on:
+  push:
+    branches: [ "mainV3.1" ]      # deploy only when the production branch updates
+  workflow_dispatch:               # ...or trigger manually from the Actions tab
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+      - name: Run tests (deploy gate)
+        run: pytest -q
+
+      - name: Build function package
+        run: |
+          zip -r function.zip aws live_controller.py engine utils strategies memory/stock_profile.json config.py -x '*/__pycache__/*' '*.pyc'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Deploy to Lambda
+        run: |
+          aws lambda update-function-code \
+            --function-name trading-assistant-live \
+            --zip-file fileb://function.zip \
+            --region us-east-1

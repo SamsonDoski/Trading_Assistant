@@ -3,16 +3,21 @@ class PortfolioAllocator:
         # Retaining V3.0 Legacy Logic: Flat $5,000 allocation per asset
         self.flat_allocation_usd = 5000.00
 
-    def calculate_shares(self, current_price):
-        """Fractional shares needed to hit the flat allocation for one ticker."""
+    def calculate_shares(self, current_price, buying_power=None):
+        """Whole shares to buy for one ticker. Targets the flat allocation, but
+        never exceeds available buying power, so Alpaca can't bounce the order.
+        Returns 0 if even one share is unaffordable within the budget."""
         if current_price is None or current_price <= 0:
-            return 0.0
-        return round(self.flat_allocation_usd / current_price, 9)
+            return 0
+        budget = self.flat_allocation_usd
+        if buying_power is not None:
+            budget = min(budget, buying_power)   # cap the $5k target at what's actually available
+        return int(budget // current_price)
 
     def generate_buy_orders(self, approved_signals, current_prices):
         """
         Takes a list of tickers with a '1.0' Buy signal and calculates
-        the exact fractional share count needed to hit the target allocation.
+        the whole-share count needed to approach the target allocation.
         """
         orders = {}
         for ticker in approved_signals:

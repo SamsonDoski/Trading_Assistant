@@ -162,7 +162,11 @@ class TestAllocator:
     def test_calculate_shares(self):
         from engine.allocator import PortfolioAllocator
         a = PortfolioAllocator()
-        assert a.calculate_shares(200.0) == 25.0
+        assert a.calculate_shares(200.0) == 25
+        # no cap -> full $5k
+        assert a.calculate_shares(200.0, buying_power=3000) == 15  # capped to $3k
+        assert a.calculate_shares(200.0, buying_power=100) == 0    # can't afford one share
+        assert a.calculate_shares(200.0, buying_power=0) == 0
         assert a.calculate_shares(0) == 0.0
         assert a.calculate_shares(None) == 0.0
 
@@ -205,6 +209,7 @@ class TestNotifier:
         import utils.notifier as nm
         seen = {}
         class FakeResp:
+            status_code = 200
             def raise_for_status(self): pass
         def fake_post(url, json=None, **k):
             seen["url"], seen["json"] = url, json
@@ -215,24 +220,52 @@ class TestNotifier:
         assert "ping" in seen["json"]["content"]
 
 
-# ================================================================ NEW: executioner
+# ================================================================ NEW: AlpacaExecutioner (TradingClient mocked, no SDK calls out)
 class TestExecutioner:
     @staticmethod
-    def _client_cls(positions):
+    def _client_cls(positions, open_order_symbols=(), buying_power="100000", closed_stopouts=()):
         class FakePos:
-            def __init__(self, s, p): self.symbol, self.unrealized_plpc = s, p
+            def __init__(self, sym, plpc, qty):
+                self.symbol, self.unrealized_plpc, self.qty = sym, plpc, qty
+        class FakeOrder:
+            def __init__(self, sym, oid):
+                self.symbol, self.id = sym, oid
+        class FakeClosed:
+            def __init__(self, sym, qty, price):
+                self.symbol, self.filled_qty, self.filled_avg_price = sym, qty, price
+                self.order_type, self.status = "trailing_stop", "filled"
+        class FakeAccount:
+            def __init__(self): self.non_marginable_buying_power = buying_power
         class FakeClient:
             def __init__(self, *a, **k):
-                self.submitted, self.closed = [], []
-                self._pos = [FakePos(s, p) for s, p in positions.items()]
+                self.submitted, self.closed, self.canceled = [], [], []
+                self._pos = [FakePos(s, plpc, qty) for s, (plpc, qty) in positions.items()]
+                self._orders = [FakeOrder(s, f"oid-{s}") for s in open_order_symbols]
+                self._closed = [FakeClosed(*c) for c in closed_stopouts]
             def get_all_positions(self): return self._pos
+            def get_account(self): return FakeAccount()
+            def get_orders(self, filter=None):
+                if "closed" in str(getattr(filter, "status", "")).lower():
+                    return list(self._closed)
+                syms = getattr(filter, "symbols", None)
+                if syms:
+                    return [o for o in self._orders if o.symbol in syms]
+                return list(self._orders)
             def submit_order(self, order_data=None): self.submitted.append(order_data)
             def close_position(self, symbol): self.closed.append(symbol)
+            def cancel_order_by_id(self, order_id): self.canceled.append(order_id)
         return FakeClient
+    
+    def test_get_buying_power(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({}, buying_power="12345.67"))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.get_buying_power() == pytest.approx(12345.67)
 
     def test_state_and_orders(self, monkeypatch):
         import engine.executioner as em
-        monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": "0.05"}))
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": ("0.05", "10")}))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
         assert ex.is_holding("AAPL") is True
         assert ex.is_holding("MSFT") is False
@@ -245,24 +278,82 @@ class TestExecutioner:
         ex.liquidate_position("AAPL")
         assert ex.api.closed == ["AAPL"]
 
+    def test_held_symbols(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.05", "10"), "MU": ("0.1", "3")}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert set(ex.held_symbols()) == {"AAPL", "MU"}
 
-# ================================================================ NEW: controller
+    def test_trailing_stop_attached_when_unprotected(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": ("0.05", "10")}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.ensure_trailing_stop("AAPL", 8.0) is True
+        assert len(ex.api.submitted) == 1            # a trailing stop was placed
+        assert "AAPL" in ex._open_order_symbols       # cached so we don't stack
+        assert ex.ensure_trailing_stop("AAPL", 8.0) is False   # now a no-op
+        assert len(ex.api.submitted) == 1
+
+    def test_trailing_stop_skipped_when_already_protected(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.05", "10")}, open_order_symbols=["AAPL"]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.ensure_trailing_stop("AAPL", 8.0) is False
+        assert ex.api.submitted == []                 # nothing placed
+
+    def test_trailing_stop_skipped_when_not_held(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": ("0.05", "10")}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.ensure_trailing_stop("MSFT", 8.0) is False
+
+    def test_liquidate_cancels_open_orders_first(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.05", "10")}, open_order_symbols=["AAPL"]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        ex.liquidate_position("AAPL")
+        assert ex.api.canceled == ["oid-AAPL"]        # cancelled the protective stop...
+        assert ex.api.closed == ["AAPL"]              # ...then closed the position
+
+    def test_get_recent_stopouts(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({}, closed_stopouts=[("MU", "8", "985.20")]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.get_recent_stopouts(hours=24) == [("MU", "8", "985.20")]
+
+
+# ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
 class TestControllerOrchestration:
-    def _wire(self, monkeypatch, signals, held):
+    def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0):
         import live_controller as lc
         class FakeScanner:
             def get_signals(self, *a, **k): return signals
         class FakeAllocator:
-            def calculate_shares(self, price): return 42.0
+            def calculate_shares(self, price, buying_power=None):
+                if buying_power is not None and buying_power < price:
+                    return 0
+                return 42
         class FakeNotifier:
             def __init__(self): self.msgs = []
             def send_message(self, m): self.msgs.append(m)
         class FakeExec:
-            def __init__(self, *a, **k): self.buys, self.sells = [], []
+            def __init__(self, *a, **k):
+                self.buys, self.sells, self.stops = [], [], []
             def is_holding(self, t): return held
             def get_unrealized_pl_pct(self, t): return 3.0
+            def get_buying_power(self): return buying_power
             def execute_market_buy(self, t, q): self.buys.append((t, q))
             def liquidate_position(self, t): self.sells.append(t)
+            def refresh_positions(self): pass
+            def refresh_open_orders(self): pass
+            def held_symbols(self): return ["AAPL"] if held else []
+            def get_recent_stopouts(self, hours=24): return []
+            def ensure_trailing_stop(self, t, pct):
+                self.stops.append((t, pct)); return True
         holder = {}
         monkeypatch.setattr(lc, "load_profiles", lambda: {
             "AAPL": {"best_short_window": 5, "best_long_window": 20, "rsi_period": 14}})
@@ -270,6 +361,7 @@ class TestControllerOrchestration:
         monkeypatch.setattr(lc, "StrategyScanner", FakeScanner)
         monkeypatch.setattr(lc, "PortfolioAllocator", FakeAllocator)
         monkeypatch.setattr(lc, "DiscordNotifier", FakeNotifier)
+        monkeypatch.setattr(lc.time, "sleep", lambda *a, **k: None)
         def make_exec(*a, **k):
             holder["exec"] = FakeExec(); return holder["exec"]
         monkeypatch.setattr(lc, "AlpacaExecutioner", make_exec)
@@ -279,7 +371,7 @@ class TestControllerOrchestration:
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
             "current_price": 200.0, "current_rsi": 40.0}, held=False)
         lc.run_live_pipeline()
-        assert h["exec"].buys == [("AAPL", 42.0)] and h["exec"].sells == []
+        assert h["exec"].buys == [("AAPL", 42)] and h["exec"].sells == []
 
     def test_sell_when_trend_dies(self, monkeypatch):
         lc, h = self._wire(monkeypatch, {"latest_signal": 0, "previous_signal": 1,
@@ -296,6 +388,19 @@ class TestControllerOrchestration:
     def test_chasing_guard_no_buy(self, monkeypatch):
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
             "current_price": 200.0, "current_rsi": 70.0}, held=False)
+        lc.run_live_pipeline()
+        assert h["exec"].buys == []
+
+    def test_protection_pass_attaches_trailing_stop(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 50.0}, held=True)
+        lc.run_live_pipeline()
+        assert h["exec"].stops == [("AAPL", lc.TRAILING_STOP_PERCENT)]
+
+
+    def test_buy_skipped_when_insufficient_buying_power(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False, buying_power=50.0)
         lc.run_live_pipeline()
         assert h["exec"].buys == []
 
@@ -345,6 +450,73 @@ class TestDataLoader:
         def boom(*a, **k): raise RuntimeError("network down")
         monkeypatch.setattr(dl.yf, "download", boom)
         assert dl.fetch_data("NOPE", start="2020-01-01", end="2020-04-01").empty
+
+
+# ================================================================ NEW: Alpaca data source (StockHistoricalDataClient mocked)
+class TestAlpacaData:
+    @staticmethod
+    def _fake_client(df, raise_exc=None):
+        class FakeBars:
+            def __init__(self, d): self.df = d
+        class FakeClient:
+            def __init__(self): self.requests = []
+            def get_stock_bars(self, request):
+                self.requests.append(request)
+                if raise_exc:
+                    raise raise_exc
+                return FakeBars(df)
+        return FakeClient()
+
+    @staticmethod
+    def _alpaca_df(ticker, n=50):
+        """Mimics alpaca-py's bars.df: MultiIndex (symbol, timestamp[UTC]) with
+        lowercase OHLCV columns."""
+        idx = pd.MultiIndex.from_product(
+            [[ticker], pd.date_range("2024-01-01", periods=n, freq="D", tz="UTC")],
+            names=["symbol", "timestamp"],
+        )
+        return pd.DataFrame({
+            "open": np.linspace(100, 150, n),
+            "high": np.linspace(101, 151, n),
+            "low": np.linspace(99, 149, n),
+            "close": np.linspace(100, 150, n),
+            "volume": np.arange(n, dtype=float),
+        }, index=idx)
+
+    def test_returns_normalized_frame(self, monkeypatch):
+        import utils.alpaca_data as ad
+        monkeypatch.setattr(ad, "_get_client",
+                            lambda: self._fake_client(self._alpaca_df("AAPL", 50)))
+        out = ad.fetch_data("AAPL", start="2024-01-01", end="2024-03-01")
+        assert not out.empty
+        assert "Close" in out.columns          # lowercase 'close' -> 'Close'
+        assert len(out) == 50
+        assert out.index.name == "Date"
+        assert isinstance(out.index, pd.DatetimeIndex)
+        assert out.index.tz is None             # tz stripped to match yfinance
+
+    def test_empty_response_returns_empty(self, monkeypatch):
+        import utils.alpaca_data as ad
+        monkeypatch.setattr(ad, "_get_client", lambda: self._fake_client(pd.DataFrame()))
+        assert ad.fetch_data("AAPL", "2024-01-01", "2024-02-01").empty
+
+    def test_api_error_returns_empty(self, monkeypatch):
+        import utils.alpaca_data as ad
+        monkeypatch.setattr(ad, "_get_client",
+                            lambda: self._fake_client(None, raise_exc=RuntimeError("api down")))
+        assert ad.fetch_data("AAPL", "2024-01-01", "2024-02-01").empty
+
+    def test_output_feeds_combo_strategy(self, monkeypatch):
+        # Proves the Alpaca frame is a true drop-in: it flows through the exact
+        # strategy the live scanner runs, producing Signal/RSI columns.
+        import utils.alpaca_data as ad
+        from strategies.ma_rsi_combo import apply_combo_strategy
+        monkeypatch.setattr(ad, "_get_client",
+                            lambda: self._fake_client(self._alpaca_df("AAPL", 300)))
+        out = ad.fetch_data("AAPL")
+        result = apply_combo_strategy(out, short_window=5, long_window=20, rsi_window=14)
+        assert "Signal" in result.columns and "RSI" in result.columns
+        assert set(result["Signal"].dropna().unique()).issubset({0, 1})
 
 
 # ================================================================ OLD: researcher

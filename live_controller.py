@@ -1,4 +1,5 @@
 import os
+import time
 from dotenv import load_dotenv
 
 from utils.profile_manager import load_profiles, is_stale
@@ -117,8 +118,9 @@ def run_live_pipeline():
             notifier.send_message(err)
 
     # 4. Protection pass — ensure every open position carries a broker-side
-    #    trailing stop. Runs AFTER the entry loop and re-reads state so fills
-    #    from this session are included.
+    #    trailing stop. Pause first so market-open fills for THIS run's buys
+    #    settle and get protected now, instead of waiting until tomorrow.
+    time.sleep(10)  # Pause for 10 seconds
     executioner.refresh_positions()
     executioner.refresh_open_orders()
     for ticker in executioner.held_symbols():

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 # Importing your existing tools
-from utils.alpaca_data import fetch_data
+from utils.alpaca_data import fetch_data  # was: from utils.data_loader import fetch_data
 from strategies.ma_rsi_combo import apply_combo_strategy
 
 class StrategyScanner:

@@ -25,7 +25,13 @@ def run_live_pipeline():
 
     api_key = os.getenv("ALPACA_API_KEY")
     secret_key = os.getenv("ALPACA_SECRET_KEY")
-    executioner = AlpacaExecutioner(api_key, secret_key, paper=True)
+    try:
+        executioner = AlpacaExecutioner(api_key, secret_key, paper=True)
+    except Exception as e:
+        msg = f"🚨 ABORT: cannot read positions from Alpaca ({e}). No trades this run."
+        print(msg)
+        notifier.send_message(msg)
+        return
 
     # 2. Universe + tuned params come from profiles, not hardcoded lists
     profiles = load_profiles()

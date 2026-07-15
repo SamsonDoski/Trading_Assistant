@@ -325,6 +325,16 @@ class TestExecutioner:
         ex = em.AlpacaExecutioner("k", "s", paper=True)
         assert ex.get_recent_stopouts(hours=24) == [("MU", "8", "985.20")]
 
+    def test_position_fetch_failure_raises(self, monkeypatch):
+        import engine.executioner as em
+        class BoomClient:
+            def __init__(self, *a, **k): pass
+            def get_all_positions(self): raise RuntimeError("request timed out")
+        monkeypatch.setattr(em, "TradingClient", BoomClient)
+        monkeypatch.setattr(em.time, "sleep", lambda *a, **k: None)   # no real waiting
+        with pytest.raises(Exception):
+            em.AlpacaExecutioner("k", "s", paper=True)   # __init__ calls refresh_positions
+
 
 # ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
 class TestControllerOrchestration:
@@ -403,6 +413,15 @@ class TestControllerOrchestration:
             "current_price": 200.0, "current_rsi": 40.0}, held=False, buying_power=50.0)
         lc.run_live_pipeline()
         assert h["exec"].buys == []
+
+
+    def test_aborts_when_positions_unreadable(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False)
+        def boom(*a, **k): raise RuntimeError("request timed out")
+        monkeypatch.setattr(lc, "AlpacaExecutioner", boom)
+        lc.run_live_pipeline()          # must not raise
+        assert "exec" not in h          # never constructed → no trades attempted
 
 
 # ================================================================ NEW: profile_manager

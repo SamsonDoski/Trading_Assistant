@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, timedelta
+import time
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
@@ -16,14 +17,22 @@ class AlpacaExecutioner:
         self.refresh_positions()
         self.refresh_open_orders()
 
-    def refresh_positions(self):
-        """Snapshot all open positions once, so we don't hit the API per ticker."""
-        try:
-            self._positions = {p.symbol: p for p in self.api.get_all_positions()}
-        except Exception as e:
-            print(f"❌ Failed to fetch positions: {e}")
-            self._positions = {}
-        return self._positions
+    def refresh_positions(self, attempts=3, delay=2.0):
+        """Snapshot all open positions. Retries transient failures (Alpaca times
+        out fairly often), then RAISES. Deliberately does not swallow errors:
+        assuming 'flat' on a failed fetch lets the bot re-buy what it already
+        owns and silently skip real exits."""
+        last_err = None
+        for i in range(attempts):
+            try:
+                self._positions = {p.symbol: p for p in self.api.get_all_positions()}
+                return self._positions
+            except Exception as e:
+                last_err = e
+                print(f"⚠️ Position fetch failed (attempt {i + 1}/{attempts}): {e}")
+                if i < attempts - 1:
+                    time.sleep(delay)
+        raise RuntimeError(f"Could not read positions after {attempts} attempts: {last_err}")
 
     def refresh_open_orders(self):
         """Snapshot which symbols already have an open (unfilled) order, so we

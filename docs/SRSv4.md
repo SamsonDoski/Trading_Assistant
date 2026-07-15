@@ -79,4 +79,4 @@ Consistent with the existing 52-test offline suite and CI deploy gate, V4.0 ship
 ---
 
 ### 7. Deferred
-Portfolio-level risk (max positions, daily-loss circuit breaker, kill switch), walk-forward validation of MA parameters, and ATR/volatility sizing remain out of scope for V4.0.
+Portfolio-level risk (max positions, daily-loss circuit breaker, kill switch), walk-forward validation of MA parameters, and ATR/volatility sizing remain out of scope for V4.0. 

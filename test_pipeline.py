@@ -227,13 +227,15 @@ class TestExecutioner:
         class FakePos:
             def __init__(self, sym, plpc, qty):
                 self.symbol, self.unrealized_plpc, self.qty = sym, plpc, qty
+                self.avg_entry_price = "100.0"
         class FakeOrder:
             def __init__(self, sym, oid):
                 self.symbol, self.id = sym, oid
         class FakeClosed:
-            def __init__(self, sym, qty, price):
+            def __init__(self, sym, qty, price, coid=""):
                 self.symbol, self.filled_qty, self.filled_avg_price = sym, qty, price
                 self.order_type, self.status = "trailing_stop", "filled"
+                self.client_order_id = coid
         class FakeAccount:
             def __init__(self): self.non_marginable_buying_power = buying_power
         class FakeClient:
@@ -318,12 +320,21 @@ class TestExecutioner:
         assert ex.api.canceled == ["oid-AAPL"]        # cancelled the protective stop...
         assert ex.api.closed == ["AAPL"]              # ...then closed the position
 
-    def test_get_recent_stopouts(self, monkeypatch):
+    def test_get_recent_stopouts_without_tag_has_no_pl(self, monkeypatch):
         import engine.executioner as em
         monkeypatch.setattr(em, "TradingClient",
                             self._client_cls({}, closed_stopouts=[("MU", "8", "985.20")]))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
-        assert ex.get_recent_stopouts(hours=24) == [("MU", "8", "985.20")]
+        assert ex.get_recent_stopouts(hours=24) == [("MU", "8", "985.20", None, None)]
+
+    def test_get_recent_stopouts_computes_realized_pl(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls(
+            {}, closed_stopouts=[("MU", "8", "918.00", "tstop-MU-900.0000-1700000000")]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        [(sym, qty, price, pl_pct, pl_usd)] = ex.get_recent_stopouts(hours=24)
+        assert pl_pct == pytest.approx(2.0)      # 900 -> 918 = +2%
+        assert pl_usd == pytest.approx(144.0)    # 18 * 8 shares
 
     def test_position_fetch_failure_raises(self, monkeypatch):
         import engine.executioner as em

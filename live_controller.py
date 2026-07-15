@@ -1,5 +1,6 @@
 import os
 import time
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 from utils.profile_manager import load_profiles, is_stale
@@ -39,8 +40,9 @@ def run_live_pipeline():
         notifier.send_message("⚠️ No stock profiles found. Nothing to trade.")
         return
 
+    greeting = "Good Morning" if datetime.now(timezone.utc).hour < 16 else "Good Evening"
     notifier.send_message(
-        "Good Morning, Olajide. Running Trading Assistant Engine for the day..."
+        f"{greeting}, Olajide. Running Trading Assistant Engine..."
     )
 
     # Running budget for this session — sized against real buying power so we
@@ -50,9 +52,13 @@ def run_live_pipeline():
     print(bp_msg)
     notifier.send_message(bp_msg)
 
-    # Report any positions the broker stopped out while we were asleep.
-    for symbol, qty, fill_price in executioner.get_recent_stopouts(hours=24):
-        so_msg = f"🛑 STOPPED OUT: {symbol} — {qty} shares @ ${float(fill_price):.2f} (trailing stop filled)"
+     # Report any positions the broker stopped out while we were asleep.
+    for symbol, qty, fill_price, pl_pct, pl_usd in executioner.get_recent_stopouts(hours=24):
+        so_msg = f"🛑 STOPPED OUT: {symbol} — {qty} shares @ ${float(fill_price):.2f}"
+        if pl_pct is not None:
+            so_msg += f" (P/L: {pl_pct:+.2f}% / ${pl_usd:+,.2f})"
+        else:
+            so_msg += " (trailing stop filled)"
         print(so_msg)
         notifier.send_message(so_msg)
 

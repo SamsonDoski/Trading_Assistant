@@ -98,6 +98,7 @@ class AlpacaExecutioner:
         qty = int(float(pos.qty))  # advanced orders require whole shares
         if qty <= 0:
             return False
+        entry = float(pos.avg_entry_price)
         try:
             order = TrailingStopOrderRequest(
                 symbol=ticker,
@@ -105,6 +106,9 @@ class AlpacaExecutioner:
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.GTC,
                 trail_percent=trail_percent,
+                # Entry price rides on the order id so a broker-side fill can
+                # report realized P/L later — no state store needed.
+                client_order_id=f"tstop-{ticker}-{entry:.4f}-{int(time.time())}",
             )
             self.api.submit_order(order_data=order)
             self._open_order_symbols.add(ticker)
@@ -136,8 +140,9 @@ class AlpacaExecutioner:
             print(f"⚠️ Could not cancel open orders for {ticker}: {e}")
 
     def get_recent_stopouts(self, hours=24):
-        """Filled trailing-stop SELL orders in the last `hours` — positions the
-        broker closed while the bot was asleep. Returns [(symbol, qty, avg_price)]."""
+        """Filled trailing-stop SELL orders in the last `hours`. Returns
+        [(symbol, qty, fill_price, pl_pct, pl_usd)] — P/L fields are None for
+        stops placed before we started tagging orders with the entry price."""
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         try:
             req = GetOrdersRequest(status=QueryOrderStatus.CLOSED, after=since, limit=200)
@@ -150,5 +155,15 @@ class AlpacaExecutioner:
             otype = str(getattr(o, "order_type", "") or "").lower()
             status = str(o.status).lower()
             if "trailing_stop" in otype and "filled" in status:
-                stopouts.append((o.symbol, o.filled_qty, o.filled_avg_price))
+                pl_pct = pl_usd = None
+                coid = str(getattr(o, "client_order_id", "") or "")
+                if coid.startswith("tstop-"):
+                    try:
+                        entry = float(coid.rsplit("-", 2)[1])
+                        fill = float(o.filled_avg_price)
+                        pl_pct = (fill - entry) / entry * 100
+                        pl_usd = (fill - entry) * float(o.filled_qty)
+                    except (IndexError, ValueError):
+                        pass  # unexpected id format — report without P/L
+                stopouts.append((o.symbol, o.filled_qty, o.filled_avg_price, pl_pct, pl_usd))
         return stopouts

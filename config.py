@@ -16,7 +16,7 @@ LONG_MA = 30
 # -----------------
 # Risk Management
 # -----------------
-TRAILING_STOP_PERCENT = 8.0  # Broker-side trailing stop; also the hard stop at entry (8% below fill)
+TRAILING_STOP_PERCENT = 15.0  # Broker-side trailing stop; also the hard stop at entry (15% below fill)
 
 # -----------------
 # Backtest Settings

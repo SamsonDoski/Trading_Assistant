@@ -36,7 +36,7 @@ RESULTS_DIR = "results"
 # -----------------
 # "shadow": compute + report verdicts on fresh buys, but size at 1.0x and never veto.
 # "live":   apply the multiplier to position size and honor vetoes.
-SENTIMENT_MODE = "shadow"
+SENTIMENT_MODE = "live"
 
 # -----------------
 # Capital Policy

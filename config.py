@@ -29,3 +29,16 @@ RISK_FREE_RATE = 0.02  # Optional: for Sharpe ratio
 # -----------------
 DATA_DIR = "data/historical_prices"
 RESULTS_DIR = "results"
+
+
+# -----------------
+# Sentiment (V4)
+# -----------------
+# "shadow": compute + report verdicts on fresh buys, but size at 1.0x and never veto.
+# "live":   apply the multiplier to position size and honor vetoes.
+SENTIMENT_MODE = "shadow"
+
+# -----------------
+# Capital Policy
+# -----------------
+CASH_RESERVE_PCT = 0.15   # fraction of buying power always held back as cash

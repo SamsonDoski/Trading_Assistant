@@ -18,7 +18,7 @@ def run_live_pipeline():
     isolated micro-modules. It decides actions; the modules do the work.
     """
     load_dotenv()
-    print("⚙️ Initializing V3.1 True Controller...")
+    print("⚙️ Initializing V4.0 True Controller...")
 
     # 1. Wire up the micro-modules
     notifier = DiscordNotifier()
@@ -159,7 +159,7 @@ def run_live_pipeline():
             print(msg)
             notifier.send_message(msg)
 
-    print("✅ V3.1 Pipeline Execution Complete.")
+    print("✅ V4.0 Pipeline Execution Complete.")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,8 @@ from utils.notifier import DiscordNotifier
 from engine.scanner import StrategyScanner
 from engine.allocator import PortfolioAllocator
 from engine.executioner import AlpacaExecutioner
-from config import TRAILING_STOP_PERCENT
+from config import TRAILING_STOP_PERCENT, SENTIMENT_MODE, CASH_RESERVE_PCT
+from engine.sentiment import SentimentAnalyzer
 
 
 def run_live_pipeline():
@@ -17,12 +18,13 @@ def run_live_pipeline():
     isolated micro-modules. It decides actions; the modules do the work.
     """
     load_dotenv()
-    print("⚙️ Initializing V3.1 True Controller...")
+    print("⚙️ Initializing V4.0 True Controller...")
 
     # 1. Wire up the micro-modules
     notifier = DiscordNotifier()
     scanner = StrategyScanner()
-    allocator = PortfolioAllocator()
+    allocator = PortfolioAllocator(cash_reserve_pct=CASH_RESERVE_PCT)
+    sentiment = SentimentAnalyzer()
 
     api_key = os.getenv("ALPACA_API_KEY")
     secret_key = os.getenv("ALPACA_SECRET_KEY")
@@ -45,10 +47,11 @@ def run_live_pipeline():
         f"{greeting}, Olajide. Running Trading Assistant Engine..."
     )
 
-    # Running budget for this session — sized against real buying power so we
-    # never submit an order Alpaca would bounce for insufficient funds.
-    budget = executioner.get_buying_power()
-    bp_msg = f"💰 Buying power available: ${budget:,.2f}"
+    # Session budget: real buying power minus the standing cash reserve.
+    buying_power = executioner.get_buying_power()
+    budget = allocator.usable_budget(buying_power)
+    bp_msg = (f"💰 Buying power: ${buying_power:,.2f} | "
+              f"deployable after {allocator.cash_reserve_pct:.0%} cash reserve: ${budget:,.2f}")
     print(bp_msg)
     notifier.send_message(bp_msg)
 
@@ -93,13 +96,28 @@ def run_live_pipeline():
 
            # Step C: State machine — this is the controller's real job
             if latest_signal == 1 and previous_signal == 0 and not holding:
-                qty = allocator.calculate_shares(price, budget)
-                if qty > 0:
-                    executioner.execute_market_buy(ticker, qty)
-                    budget -= qty * price              # spend from the running budget
-                    state_msg = f"🚀 BUY EXECUTED: {qty} shares @ ${price:.2f} (BP left: ${budget:,.0f})"
+                report = sentiment.get_verdict(ticker)
+                mode_tag = "LIVE" if SENTIMENT_MODE == "live" else "SHADOW"
+                notifier.send_message(
+                    f"📰 **{ticker}** | sentiment x{report.sentiment_multiplier:.2f}"
+                    f"{' + VETO' if report.veto else ''} [{mode_tag}] — {report.rationale}"
+                )
+                if report.headlines:
+                    digest = "\n".join(f"• {h[:120]}" for h in report.headlines[:5])
+                    notifier.send_message(f"🗞️ **{ticker}** headlines considered:\n{digest}")
+
+                if SENTIMENT_MODE == "live" and report.veto:
+                    state_msg = f"⛔ BUY VETOED by sentiment — {report.rationale}"
                 else:
-                    state_msg = "⏸️ BUY signal — skipped, insufficient buying power."
+                    multiplier = report.sentiment_multiplier if SENTIMENT_MODE == "live" else 1.0
+                    qty = allocator.calculate_shares(price, budget, multiplier)
+                    if qty > 0:
+                        executioner.execute_market_buy(ticker, qty)
+                        budget -= qty * price
+                        state_msg = f"🚀 BUY EXECUTED: {qty} shares @ ${price:.2f} (BP left: ${budget:,.0f})"
+                    else:
+                        state_msg = "⏸️ BUY signal — skipped, insufficient deployable budget."
+
 
             elif latest_signal == 0 and holding:
                 pl = executioner.get_unrealized_pl_pct(ticker)
@@ -141,7 +159,7 @@ def run_live_pipeline():
             print(msg)
             notifier.send_message(msg)
 
-    print("✅ V3.1 Pipeline Execution Complete.")
+    print("✅ V4.0 Pipeline Execution Complete.")
 
 
 if __name__ == "__main__":

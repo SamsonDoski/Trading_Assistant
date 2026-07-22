@@ -176,6 +176,19 @@ class TestAllocator:
             ["AAPL", "MSFT"], {"AAPL": 100.0, "MSFT": 0})
         assert orders["AAPL"] == 50.0 and "MSFT" not in orders
 
+    def test_usable_budget_holds_back_reserve(self):
+        from engine.allocator import PortfolioAllocator
+        a = PortfolioAllocator(cash_reserve_pct=0.15)
+        assert a.usable_budget(100_000) == pytest.approx(85_000)
+        assert a.usable_budget(0) == 0.0
+        assert a.usable_budget(None) == 0.0
+
+    def test_calculate_shares_with_multiplier(self):
+        from engine.allocator import PortfolioAllocator
+        a = PortfolioAllocator()
+        assert a.calculate_shares(200.0, buying_power=100000, multiplier=1.5) == 37  # $7500
+        assert a.calculate_shares(200.0, buying_power=100000, multiplier=0.5) == 12  # $2500
+        assert a.calculate_shares(200.0, buying_power=3000, multiplier=1.5) == 15    # BP cap wins
 
 # ================================================================ NEW: scanner
 class TestScanner:
@@ -349,15 +362,29 @@ class TestExecutioner:
 
 # ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
 class TestControllerOrchestration:
-    def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0):
+    def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0, sentiment_report=None, sentiment_mode="shadow"):
         import live_controller as lc
         class FakeScanner:
             def get_signals(self, *a, **k): return signals
         class FakeAllocator:
-            def calculate_shares(self, price, buying_power=None):
+            cash_reserve_pct = 0.15
+            def __init__(self, *a, **k): pass
+            def usable_budget(self, bp): return bp
+            def calculate_shares(self, price, buying_power=None, multiplier=1.0):
                 if buying_power is not None and buying_power < price:
                     return 0
-                return 42
+                return int(42 * multiplier)
+            
+
+        from engine.sentiment import SentimentReport
+        class FakeSentiment:
+            def get_verdict(self, t):
+                return sentiment_report or SentimentReport(
+                    sentiment_multiplier=1.0, veto=False, rationale="neutral", headlines=[])
+        monkeypatch.setattr(lc, "SentimentAnalyzer", FakeSentiment)
+        monkeypatch.setattr(lc, "SENTIMENT_MODE", sentiment_mode)
+
+
         class FakeNotifier:
             def __init__(self): self.msgs = []
             def send_message(self, m): self.msgs.append(m)
@@ -434,6 +461,46 @@ class TestControllerOrchestration:
         lc.run_live_pipeline()          # must not raise
         assert "exec" not in h          # never constructed → no trades attempted
 
+
+    def test_shadow_mode_sizes_at_baseline_despite_bullish_verdict(self, monkeypatch):
+        from engine.sentiment import SentimentReport
+        bullish = SentimentReport(sentiment_multiplier=1.5, veto=False,
+                                  rationale="great news", headlines=["Beat"])
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False,
+            sentiment_report=bullish, sentiment_mode="shadow")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == [("AAPL", 42)]
+
+    def test_live_mode_applies_multiplier(self, monkeypatch):
+        from engine.sentiment import SentimentReport
+        bullish = SentimentReport(sentiment_multiplier=1.5, veto=False,
+                                  rationale="great news", headlines=["Beat"])
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False,
+            sentiment_report=bullish, sentiment_mode="live")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == [("AAPL", 63)]
+
+    def test_live_mode_veto_skips_buy(self, monkeypatch):
+        from engine.sentiment import SentimentReport
+        toxic = SentimentReport(sentiment_multiplier=0.5, veto=True,
+                                rationale="fraud probe", headlines=["DOJ probes"])
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False,
+            sentiment_report=toxic, sentiment_mode="live")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == []
+
+    def test_shadow_mode_veto_still_buys(self, monkeypatch):
+        from engine.sentiment import SentimentReport
+        toxic = SentimentReport(sentiment_multiplier=0.5, veto=True,
+                                rationale="fraud probe", headlines=["DOJ probes"])
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False,
+            sentiment_report=toxic, sentiment_mode="shadow")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == [("AAPL", 42)]
 
 # ================================================================ NEW: profile_manager
 class TestProfileManager:
@@ -638,6 +705,70 @@ def test_entrypoint_modules_import():
               "utils.notifier"):
         importlib.import_module(m)
 
+
+
+# ================================================================ NEW: SentimentAnalyzer (news + Claude Haiku mocked)
+class TestSentiment:
+    @staticmethod
+    def _analyzer(headlines=None, verdict=None, llm_raises=False, news_raises=False):
+        from engine.sentiment import SentimentAnalyzer
+        a = SentimentAnalyzer()
+
+        class FakeNewsItem:
+            def __init__(self, h): self.headline = h
+        class FakeNewsSet:
+            def __init__(self, items): self.data = {"news": items}
+        class FakeNewsClient:
+            def get_news(self, req):
+                if news_raises:
+                    raise RuntimeError("news api down")
+                return FakeNewsSet([FakeNewsItem(h) for h in (headlines or [])])
+
+        class FakeParsed:
+            def __init__(self, v): self.parsed_output = v
+        class FakeMessages:
+            def parse(self, **kwargs):
+                if llm_raises:
+                    raise RuntimeError("anthropic down")
+                return FakeParsed(verdict)
+        class FakeLLM:
+            messages = FakeMessages()
+
+        a._news_client = FakeNewsClient()
+        a._llm = FakeLLM()
+        return a
+
+    def test_no_news_returns_neutral(self):
+        v = self._analyzer(headlines=[]).get_verdict("AAPL")
+        assert v.sentiment_multiplier == 1.0 and v.veto is False and v.headlines == []
+
+    def test_news_api_failure_returns_neutral(self):
+        v = self._analyzer(news_raises=True).get_verdict("AAPL")
+        assert v.sentiment_multiplier == 1.0 and v.veto is False
+
+    def test_llm_failure_returns_neutral_but_keeps_headlines(self):
+        v = self._analyzer(headlines=["Big news"], llm_raises=True).get_verdict("AAPL")
+        assert v.sentiment_multiplier == 1.0 and v.veto is False
+        assert v.headlines == ["Big news"]          # evidence survives the failure
+
+    def test_happy_path_carries_verdict_and_evidence(self):
+        from engine.sentiment import SentimentVerdict
+        good = SentimentVerdict(sentiment_multiplier=1.4, veto=False, rationale="strong earnings")
+        v = self._analyzer(headlines=["Beats earnings"], verdict=good).get_verdict("NVDA")
+        assert v.sentiment_multiplier == pytest.approx(1.4)
+        assert v.headlines == ["Beats earnings"]
+
+    def test_multiplier_is_clamped(self):
+        from engine.sentiment import SentimentVerdict
+        wild = SentimentVerdict(sentiment_multiplier=3.0, veto=False, rationale="moon")
+        assert self._analyzer(headlines=["H"], verdict=wild).get_verdict("N").sentiment_multiplier == 1.5
+        low = SentimentVerdict(sentiment_multiplier=0.1, veto=False, rationale="doom")
+        assert self._analyzer(headlines=["H"], verdict=low).get_verdict("N").sentiment_multiplier == 0.5
+
+    def test_veto_passes_through(self):
+        from engine.sentiment import SentimentVerdict
+        bad = SentimentVerdict(sentiment_multiplier=0.5, veto=True, rationale="SEC investigation")
+        assert self._analyzer(headlines=["SEC probe"], verdict=bad).get_verdict("XYZ").veto is True
 
 # ================================================================ documented exclusions
 @pytest.mark.skip(reason="Manual live-account scripts: they touch Alpaca at import "

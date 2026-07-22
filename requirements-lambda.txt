@@ -4,3 +4,4 @@ numpy==2.3.2
 yfinance==0.2.65
 python-dotenv==1.2.2
 requests==2.32.4
+anthropic==0.117.1

@@ -770,6 +770,20 @@ class TestSentiment:
         bad = SentimentVerdict(sentiment_multiplier=0.5, veto=True, rationale="SEC investigation")
         assert self._analyzer(headlines=["SEC probe"], verdict=bad).get_verdict("XYZ").veto is True
 
+    def test_headlines_are_age_annotated(self):
+        from engine.sentiment import SentimentAnalyzer
+        from datetime import datetime, timedelta, timezone
+        a = SentimentAnalyzer()
+        class Item:
+            headline = "Fresh story"
+            created_at = datetime.now(timezone.utc) - timedelta(hours=3)
+        class NewsSet:
+            data = {"news": [Item()]}
+        class Client:
+            def get_news(self, req): return NewsSet()
+        a._news_client = Client()
+        [h] = a.fetch_headlines("NVDA")
+        assert h.startswith("[3h ago]") and "Fresh story" in h
 # ================================================================ documented exclusions
 @pytest.mark.skip(reason="Manual live-account scripts: they touch Alpaca at import "
                          "(v3_first_order.py even places an order). Not unit-testable "

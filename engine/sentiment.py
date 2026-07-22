@@ -45,7 +45,10 @@ Score the news impact on that purchase:
 - veto: true ONLY for disqualifying events — fraud, bankruptcy risk, SEC/DOJ investigation,
   delisting, going-concern doubt, auditor resignation. Ordinary bad news is NOT a veto;
   express it through a low multiplier instead.
-- rationale: one short sentence explaining your call."""
+- rationale: one short sentence explaining your call.
+
+Headlines are prefixed with their age, e.g. "[3h ago]". Weight fresher news more
+heavily; older news within the window may already be priced in."""
 
 
 class SentimentAnalyzer:
@@ -80,21 +83,35 @@ class SentimentAnalyzer:
         return self._llm
 
     def fetch_headlines(self, ticker, hours=24, limit=10):
-        """Recent headlines for the ticker; empty list on any failure.
+        """Recent headlines for the ticker, each prefixed with its age
+        (e.g. "[3h ago] ...") so the model can weight recency. Empty list on
+        any failure.
 
         Single seam for news sourcing: additional providers plug in here
         (fetch, merge, dedupe) without any caller changing.
         """
         try:
             from alpaca.data.requests import NewsRequest
+            now = datetime.now(timezone.utc)
             req = NewsRequest(
                 symbols=ticker,
-                start=datetime.now(timezone.utc) - timedelta(hours=hours),
+                start=now - timedelta(hours=hours),
                 limit=limit,
             )
             news = self._get_news_client().get_news(req)
             items = news.data.get("news", []) if hasattr(news, "data") else []
-            return [h for h in (getattr(i, "headline", "") or "" for i in items) if h]
+            headlines = []
+            for item in items:
+                headline = getattr(item, "headline", "") or ""
+                if not headline:
+                    continue
+                try:
+                    created = getattr(item, "created_at", None)
+                    age_h = (now - created).total_seconds() / 3600.0
+                    headlines.append(f"[{max(age_h, 0):.0f}h ago] {headline}")
+                except Exception:
+                    headlines.append(headline)   # keep the headline even if its timestamp is unusable
+            return headlines
         except Exception as e:
             print(f"⚠️ News fetch failed for {ticker}: {e}")
             return []

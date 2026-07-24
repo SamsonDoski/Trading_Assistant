@@ -936,6 +936,41 @@ class TestSentiment:
         headlines = a.fetch_headlines("MU", hours=24)
         assert any("Fresh" in h for h in headlines)
         assert not any("Ancient" in h for h in headlines)
+
+
+    def test_summary_is_appended_to_headline(self):
+        from engine.sentiment import SentimentAnalyzer
+        from datetime import datetime, timezone
+        a = SentimentAnalyzer()
+        class Item:
+            headline = "Meta beats on earnings"
+            summary = "Meta reported Q3 revenue above estimates, driven by ad growth."
+            created_at = datetime.now(timezone.utc)
+        class NewsSet:
+            data = {"news": [Item()]}
+        class Client:
+            def get_news(self, req): return NewsSet()
+        a._news_client = Client()
+        [h] = a.fetch_headlines("META")
+        assert "Meta beats on earnings" in h
+        assert "ad growth" in h          # the summary reached the prompt string
+
+    def test_long_summary_is_truncated(self):
+        from engine.sentiment import SentimentAnalyzer
+        from datetime import datetime, timezone
+        a = SentimentAnalyzer()
+        class Item:
+            headline = "Big news"
+            summary = "x" * 1000
+            created_at = datetime.now(timezone.utc)
+        class NewsSet:
+            data = {"news": [Item()]}
+        class Client:
+            def get_news(self, req): return NewsSet()
+        a._news_client = Client()
+        [h] = a.fetch_headlines("NVDA", summary_chars=50)
+        assert h.endswith("…")
+        assert len(h) < 200              # bounded, not the full 1000 chars
 # ================================================================ documented exclusions
 @pytest.mark.skip(reason="Manual live-account scripts: they touch Alpaca at import "
                          "(v3_first_order.py even places an order). Not unit-testable "

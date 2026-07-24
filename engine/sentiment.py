@@ -108,6 +108,8 @@ class SentimentAnalyzer:
                 try:
                     created = getattr(item, "created_at", None)
                     age_h = (now - created).total_seconds() / 3600.0
+                    if age_h > hours:
+                        continue     # skip any news that slipped past the filter
                     headlines.append(f"[{max(age_h, 0):.0f}h ago] {headline}")
                 except Exception:
                     headlines.append(headline)   # keep the headline even if its timestamp is unusable

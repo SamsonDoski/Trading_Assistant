@@ -784,6 +784,25 @@ class TestSentiment:
         a._news_client = Client()
         [h] = a.fetch_headlines("NVDA")
         assert h.startswith("[3h ago]") and "Fresh story" in h
+
+
+    def test_stale_headlines_are_dropped(self):
+        from engine.sentiment import SentimentAnalyzer
+        from datetime import datetime, timedelta, timezone
+        a = SentimentAnalyzer()
+        now = datetime.now(timezone.utc)
+        class Item:
+            def __init__(self, h, age_h):
+                self.headline = h
+                self.created_at = now - timedelta(hours=age_h)
+        class NewsSet:
+            data = {"news": [Item("Fresh", 2), Item("Ancient", 772)]}
+        class Client:
+            def get_news(self, req): return NewsSet()
+        a._news_client = Client()
+        headlines = a.fetch_headlines("MU", hours=24)
+        assert any("Fresh" in h for h in headlines)
+        assert not any("Ancient" in h for h in headlines)
 # ================================================================ documented exclusions
 @pytest.mark.skip(reason="Manual live-account scripts: they touch Alpaca at import "
                          "(v3_first_order.py even places an order). Not unit-testable "

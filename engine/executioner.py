@@ -4,6 +4,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
     TrailingStopOrderRequest,
+    StopOrderRequest,
     GetOrdersRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce, QueryOrderStatus
@@ -14,6 +15,7 @@ class AlpacaExecutioner:
         self.api = TradingClient(api_key, secret_key, paper=paper)
         self._positions = {}
         self._open_order_symbols = set()
+        self._fractionable_cache = {}  # cache of symbols that support fractional shares
         self.refresh_positions()
         self.refresh_open_orders()
 
@@ -70,6 +72,26 @@ class AlpacaExecutioner:
             print(f"❌ Failed to fetch buying power: {e}")
             return 0.0
 
+    def fractionable(self, ticker):
+        """True if Alpaca allows fractional-share orders on this symbol. Cached
+        per run. Defaults to False on lookup failure so we never fire a
+        fractional order the broker would reject."""
+        if ticker in self._fractionable_cache:
+            return self._fractionable_cache[ticker]
+        try:
+            asset = self.api.get_asset(ticker)
+            result = bool(getattr(asset, "fractionable", False))
+        except Exception as e:
+            print(f"⚠️ Could not check fractionable for {ticker}: {e}")
+            result = False
+        self._fractionable_cache[ticker] = result
+        return result
+
+    def position_qty(self, ticker):
+        """Raw share quantity held (float; may be fractional). 0.0 if not held."""
+        pos = self._positions.get(ticker)
+        return float(pos.qty) if pos else 0.0
+
     def execute_market_buy(self, ticker, qty):
         """Submits a whole-share market buy for the qty the allocator sized."""
         if qty is None or qty <= 0:
@@ -86,37 +108,129 @@ class AlpacaExecutioner:
         except Exception as e:
             print(f"❌ Failed to execute BUY for {ticker}: {e}")
 
-    def ensure_trailing_stop(self, ticker, trail_percent):
-        """Attach a broker-side trailing stop to a held position that lacks one.
-        The trail distance also serves as the hard stop at entry (trail% below
-        the fill). Returns True only if a new stop was actually submitted."""
+    def ensure_protective_stop(self, ticker, stop_percent):
+        """Attach the right kind of broker-side stop to a held position, or sell
+        it if it's already past its stop. Returns a Discord-ready status line, or
+        None if nothing needed doing.
+
+        Whole-share position -> GTC trailing stop (trails natively, survives
+        overnight). Fractional position -> Alpaca forbids trailing stops on
+        sub-share qty and only allows DAY time-in-force, so we place a DAY stop
+        at a high-water `protected_stop_price` that ratchets up run to run
+        (software trailing) and re-place it each run. If price is already at or
+        below that level (e.g. an overnight gap after the DAY stop expired), we
+        liquidate directly as the backstop instead of submitting a stop that
+        would fire on placement."""
         pos = self._positions.get(ticker)
         if pos is None:
-            return False
+            return None
         if ticker in self._open_order_symbols:
-            return False  # already protected — don't stack orders
-        qty = int(float(pos.qty))  # advanced orders require whole shares
-        if qty <= 0:
-            return False
-        entry = float(pos.avg_entry_price)
+            return None  # already protected this session — don't stack
+
+        qty = float(pos.qty)
+        entry_price = float(pos.avg_entry_price)
+        is_whole = qty >= 1 and qty == int(qty)
+        if is_whole:
+            return self._attach_trailing_stop(ticker, int(qty), entry_price, stop_percent)
+        return self._attach_fractional_stop(ticker, qty, entry_price, stop_percent / 100.0)
+
+    def _attach_trailing_stop(self, ticker, qty, entry_price, stop_percent):
+        """GTC trailing stop for a whole-share position (unchanged V4.0 behavior).
+        Entry price rides on the order id so a broker-side fill can report
+        realized P/L later — no state store needed."""
         try:
             order = TrailingStopOrderRequest(
                 symbol=ticker,
                 qty=qty,
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.GTC,
-                trail_percent=trail_percent,
-                # Entry price rides on the order id so a broker-side fill can
-                # report realized P/L later — no state store needed.
-                client_order_id=f"tstop-{ticker}-{entry:.4f}-{int(time.time())}",
+                trail_percent=stop_percent,
+                client_order_id=f"tstop-{ticker}-{entry_price:.4f}-{int(time.time())}",
             )
             self.api.submit_order(order_data=order)
             self._open_order_symbols.add(ticker)
-            print(f"🛡️ Trailing stop {trail_percent}% set on {ticker} ({qty} shares)")
-            return True
+            print(f"🛡️ Trailing stop {stop_percent}% set on {ticker} ({qty} shares)")
+            return f"🛡️ **{ticker}** | Trailing stop {stop_percent}% attached ({qty} shares)."
         except Exception as e:
             print(f"❌ Failed to set trailing stop for {ticker}: {e}")
-            return False
+            return None
+
+    def _attach_fractional_stop(self, ticker, qty, entry_price, stop_fraction):
+        """Software trailing stop for a fractional position via a re-placed DAY
+        stop whose level only ever ratchets up:
+
+            candidate_stop_price = current_price * (1 - stop_fraction)
+            protected_stop_price = max(previous_protected_stop_price, candidate_stop_price)
+
+        `protected_stop_price` is carried on the order's client_order_id and
+        recovered next run (same trick the trailing stop uses for entry price),
+        so no external state store is needed. DAY stops expire at close, hence
+        the re-placement each run — and hence no overnight coverage, which the
+        'already past stop' branch below backstops on the next run."""
+        pos = self._positions.get(ticker)
+        try:
+            current_price = float(pos.current_price)
+        except (TypeError, ValueError, AttributeError):
+            current_price = entry_price  # field missing — fall back to entry
+
+        seed_stop = entry_price * (1.0 - stop_fraction)
+        previous_stop = self._recover_protected_stop(ticker)
+        floor_stop = previous_stop if previous_stop is not None else seed_stop
+        candidate_stop = current_price * (1.0 - stop_fraction)
+        protected_stop_price = max(floor_stop, candidate_stop)
+
+        # Already at/below the locked level -> the trailing stop has been hit
+        # while we were away (DAY stop had expired). Sell now.
+        if current_price <= protected_stop_price:
+            self.liquidate_position(ticker)
+            return (f"🩹 **{ticker}** | Fractional position past stop "
+                    f"(${current_price:.2f} ≤ ${protected_stop_price:.2f}) — liquidated.")
+
+        stop_price = round(protected_stop_price, 2)  # note: sub-$1 tickers lose precision here
+        try:
+            order = StopOrderRequest(
+                symbol=ticker,
+                qty=qty,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY,
+                stop_price=stop_price,
+                client_order_id=f"fstop-{ticker}-{protected_stop_price:.4f}-{int(time.time())}",
+            )
+            self.api.submit_order(order_data=order)
+            self._open_order_symbols.add(ticker)
+            print(f"🛡️ Fractional DAY stop @ ${stop_price} on {ticker} ({qty} shares)")
+            return (f"🛡️ **{ticker}** | Fractional DAY stop @ ${stop_price:.2f} "
+                    f"(software-trailing, re-set each run).")
+        except Exception as e:
+            # Broker rejected the fractional stop (docs are ambiguous on support)
+            # — degrade to the next-run backstop rather than crash the pass.
+            print(f"❌ Fractional stop rejected for {ticker}: {e} — relying on run-time check.")
+            return None
+
+    def _recover_protected_stop(self, ticker):
+        """Highest `protected_stop_price` previously committed for a fractional
+        position, parsed from the client_order_id of past DAY stops (open or
+        expired). Returns None if none found — caller then seeds from entry.
+        One order-history call per fractional name; fine at current scale, could
+        be batched into a single bulk fetch later if the watchlist grows."""
+        try:
+            req = GetOrdersRequest(status=QueryOrderStatus.ALL, symbols=[ticker], limit=50)
+            orders = self.api.get_orders(filter=req)
+        except Exception as e:
+            print(f"⚠️ Could not recover prior stop for {ticker}: {e}")
+            return None
+        best = None
+        prefix = f"fstop-{ticker}-"
+        for o in orders:
+            coid = str(getattr(o, "client_order_id", "") or "")
+            if coid.startswith(prefix):
+                try:
+                    level = float(coid.rsplit("-", 2)[1])
+                    if best is None or level > best:
+                        best = level
+                except (IndexError, ValueError):
+                    pass
+        return best
 
     def liquidate_position(self, ticker):
         """Closes the entire position. Cancels any protective stop first so the

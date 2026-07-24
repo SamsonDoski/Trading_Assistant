@@ -157,25 +157,8 @@ class TestConfig:
         assert config.RESULTS_DIR
 
 
-# ================================================================ NEW: allocator
+# ================================================================ NEW: allocator (V4.1 equal-weight + fractional)
 class TestAllocator:
-    def test_calculate_shares(self):
-        from engine.allocator import PortfolioAllocator
-        a = PortfolioAllocator()
-        assert a.calculate_shares(200.0) == 25
-        # no cap -> full $5k
-        assert a.calculate_shares(200.0, buying_power=3000) == 15  # capped to $3k
-        assert a.calculate_shares(200.0, buying_power=100) == 0    # can't afford one share
-        assert a.calculate_shares(200.0, buying_power=0) == 0
-        assert a.calculate_shares(0) == 0.0
-        assert a.calculate_shares(None) == 0.0
-
-    def test_legacy_generate_buy_orders(self):
-        from engine.allocator import PortfolioAllocator
-        orders = PortfolioAllocator().generate_buy_orders(
-            ["AAPL", "MSFT"], {"AAPL": 100.0, "MSFT": 0})
-        assert orders["AAPL"] == 50.0 and "MSFT" not in orders
-
     def test_usable_budget_holds_back_reserve(self):
         from engine.allocator import PortfolioAllocator
         a = PortfolioAllocator(cash_reserve_pct=0.15)
@@ -183,12 +166,77 @@ class TestAllocator:
         assert a.usable_budget(0) == 0.0
         assert a.usable_budget(None) == 0.0
 
-    def test_calculate_shares_with_multiplier(self):
+    def test_base_allocation_is_equal_weight_with_no_flat_cap(self):
         from engine.allocator import PortfolioAllocator
         a = PortfolioAllocator()
-        assert a.calculate_shares(200.0, buying_power=100000, multiplier=1.5) == 37  # $7500
-        assert a.calculate_shares(200.0, buying_power=100000, multiplier=0.5) == 12  # $2500
-        assert a.calculate_shares(200.0, buying_power=3000, multiplier=1.5) == 15    # BP cap wins
+        # $85k deployable split across 20 not-held names -> $4,250 each
+        assert a.base_allocation(85_000, 20) == pytest.approx(4_250)
+        # NO $5k cap: a $1M-ish account gets a proportionally big slice
+        assert a.base_allocation(850_000, 20) == pytest.approx(42_500)
+        # guards: nothing to deploy / everything already held
+        assert a.base_allocation(85_000, 0) == 0.0
+        assert a.base_allocation(0, 20) == 0.0
+        assert a.base_allocation(None, 20) == 0.0
+
+    def test_calculate_shares_whole(self):
+        from engine.allocator import PortfolioAllocator
+        a = PortfolioAllocator()
+        assert a.calculate_shares(200.0, base_allocation_usd=5000) == (25, False)
+        assert a.calculate_shares(0, base_allocation_usd=5000) == (0, False)
+        assert a.calculate_shares(None, base_allocation_usd=5000) == (0, False)
+        assert a.calculate_shares(200.0, base_allocation_usd=0) == (0, False)
+
+    def test_multiplier_applied_before_budget_cap(self):
+        from engine.allocator import PortfolioAllocator
+        a = PortfolioAllocator()
+        # $5000 x1.5 = $7500 / $200 -> 37
+        assert a.calculate_shares(200.0, base_allocation_usd=5000,
+                                  conviction_multiplier=1.5) == (37, False)
+        # $5000 x0.5 = $2500 / $200 -> 12
+        assert a.calculate_shares(200.0, base_allocation_usd=5000,
+                                  conviction_multiplier=0.5) == (12, False)
+        # cap is applied AFTER the multiplier: $3000 remaining wins over $7500
+        assert a.calculate_shares(200.0, base_allocation_usd=5000,
+                                  remaining_budget_usd=3000,
+                                  conviction_multiplier=1.5) == (15, False)
+
+    def test_no_flat_cap_on_large_account(self):
+        from engine.allocator import PortfolioAllocator
+        a = PortfolioAllocator()
+        # $50k slice, no cap -> 250 shares at $200
+        assert a.calculate_shares(200.0, base_allocation_usd=50_000) == (250, False)
+
+    def test_fractional_fallback_when_whole_unaffordable(self):
+        from engine.allocator import PortfolioAllocator
+        a = PortfolioAllocator(min_fractional_notional_usd=1.00)
+        shares, is_frac = a.calculate_shares(200.0, base_allocation_usd=14.0,
+                                             allow_fractional=True)
+        assert is_frac is True
+        assert shares == pytest.approx(0.07)      # 14/200, always < 1 by construction
+        assert 0 < shares < 1
+
+    def test_fractional_disabled_returns_zero(self):
+        from engine.allocator import PortfolioAllocator
+        a = PortfolioAllocator()
+        # default allow_fractional=False -> skip rather than buy a fraction
+        assert a.calculate_shares(200.0, base_allocation_usd=14.0) == (0, False)
+
+    def test_fractional_dust_floor(self):
+        from engine.allocator import PortfolioAllocator
+        a = PortfolioAllocator(min_fractional_notional_usd=5.00)
+        # $2 slice is below the $5 dust floor -> nothing
+        assert a.calculate_shares(200.0, base_allocation_usd=2.0,
+                                  allow_fractional=True) == (0, False)
+        # $6 slice clears it -> fractional
+        shares, is_frac = a.calculate_shares(200.0, base_allocation_usd=6.0,
+                                             allow_fractional=True)
+        assert is_frac is True and shares == pytest.approx(0.03)
+
+    def test_legacy_generate_buy_orders(self):
+        from engine.allocator import PortfolioAllocator
+        orders = PortfolioAllocator().generate_buy_orders(
+            ["AAPL", "MSFT"], {"AAPL": 100.0, "MSFT": 0})
+        assert orders["AAPL"] == 50 and "MSFT" not in orders
 
 # ================================================================ NEW: scanner
 class TestScanner:
@@ -236,14 +284,21 @@ class TestNotifier:
 # ================================================================ NEW: AlpacaExecutioner (TradingClient mocked, no SDK calls out)
 class TestExecutioner:
     @staticmethod
-    def _client_cls(positions, open_order_symbols=(), buying_power="100000", closed_stopouts=()):
+    def _client_cls(positions, open_order_symbols=(), buying_power="100000",
+                    closed_stopouts=(), all_orders=(), fractionable=True,
+                    asset_raises=False, current_prices=None):
+        current_prices = current_prices or {}
         class FakePos:
-            def __init__(self, sym, plpc, qty):
+            def __init__(self, sym, plpc, qty, current_price):
                 self.symbol, self.unrealized_plpc, self.qty = sym, plpc, qty
                 self.avg_entry_price = "100.0"
+                self.current_price = current_price
         class FakeOrder:
             def __init__(self, sym, oid):
                 self.symbol, self.id = sym, oid
+        class FakeAll:                       # order-history rows w/ client_order_id
+            def __init__(self, sym, coid):
+                self.symbol, self.client_order_id = sym, coid
         class FakeClosed:
             def __init__(self, sym, qty, price, coid=""):
                 self.symbol, self.filled_qty, self.filled_avg_price = sym, qty, price
@@ -254,15 +309,25 @@ class TestExecutioner:
         class FakeClient:
             def __init__(self, *a, **k):
                 self.submitted, self.closed, self.canceled = [], [], []
-                self._pos = [FakePos(s, plpc, qty) for s, (plpc, qty) in positions.items()]
+                self._pos = [FakePos(s, plpc, qty, current_prices.get(s, "100.0"))
+                             for s, (plpc, qty) in positions.items()]
                 self._orders = [FakeOrder(s, f"oid-{s}") for s in open_order_symbols]
+                self._all_orders = [FakeAll(s, c) for s, c in all_orders]
                 self._closed = [FakeClosed(*c) for c in closed_stopouts]
             def get_all_positions(self): return self._pos
             def get_account(self): return FakeAccount()
+            def get_asset(self, symbol):
+                if asset_raises:
+                    raise RuntimeError("asset lookup failed")
+                return types.SimpleNamespace(fractionable=fractionable)
             def get_orders(self, filter=None):
-                if "closed" in str(getattr(filter, "status", "")).lower():
-                    return list(self._closed)
+                status = str(getattr(filter, "status", "")).lower()
                 syms = getattr(filter, "symbols", None)
+                if "closed" in status:
+                    return list(self._closed)
+                if "all" in status:
+                    out = list(self._all_orders)
+                    return [o for o in out if o.symbol in syms] if syms else out
                 if syms:
                     return [o for o in self._orders if o.symbol in syms]
                 return list(self._orders)
@@ -270,7 +335,7 @@ class TestExecutioner:
             def close_position(self, symbol): self.closed.append(symbol)
             def cancel_order_by_id(self, order_id): self.canceled.append(order_id)
         return FakeClient
-    
+
     def test_get_buying_power(self, monkeypatch):
         import engine.executioner as em
         monkeypatch.setattr(em, "TradingClient",
@@ -293,6 +358,14 @@ class TestExecutioner:
         ex.liquidate_position("AAPL")
         assert ex.api.closed == ["AAPL"]
 
+    def test_execute_market_buy_accepts_fractional(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        ex.execute_market_buy("MSFT", 0.5)
+        assert len(ex.api.submitted) == 1
+        assert float(ex.api.submitted[0].qty) == pytest.approx(0.5)
+
     def test_held_symbols(self, monkeypatch):
         import engine.executioner as em
         monkeypatch.setattr(em, "TradingClient",
@@ -300,29 +373,86 @@ class TestExecutioner:
         ex = em.AlpacaExecutioner("k", "s", paper=True)
         assert set(ex.held_symbols()) == {"AAPL", "MU"}
 
-    def test_trailing_stop_attached_when_unprotected(self, monkeypatch):
+    def test_fractionable_and_position_qty(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.02", "0.5")}, fractionable=True))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.fractionable("AAPL") is True
+        assert ex.position_qty("AAPL") == pytest.approx(0.5)
+        assert ex.position_qty("MSFT") == 0.0
+
+    def test_fractionable_false_on_lookup_failure(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({}, asset_raises=True))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.fractionable("AAPL") is False
+
+    # ---- whole-share position -> GTC trailing stop (unchanged behavior) ----
+    def test_whole_position_gets_trailing_stop(self, monkeypatch):
         import engine.executioner as em
         monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": ("0.05", "10")}))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
-        assert ex.ensure_trailing_stop("AAPL", 8.0) is True
-        assert len(ex.api.submitted) == 1            # a trailing stop was placed
-        assert "AAPL" in ex._open_order_symbols       # cached so we don't stack
-        assert ex.ensure_trailing_stop("AAPL", 8.0) is False   # now a no-op
+        msg = ex.ensure_protective_stop("AAPL", 8.0)
+        assert msg is not None and "Trailing" in msg
+        assert len(ex.api.submitted) == 1
+        assert "AAPL" in ex._open_order_symbols
+        assert ex.ensure_protective_stop("AAPL", 8.0) is None   # no stacking
         assert len(ex.api.submitted) == 1
 
-    def test_trailing_stop_skipped_when_already_protected(self, monkeypatch):
+    def test_stop_skipped_when_already_protected(self, monkeypatch):
         import engine.executioner as em
         monkeypatch.setattr(em, "TradingClient",
                             self._client_cls({"AAPL": ("0.05", "10")}, open_order_symbols=["AAPL"]))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
-        assert ex.ensure_trailing_stop("AAPL", 8.0) is False
-        assert ex.api.submitted == []                 # nothing placed
+        assert ex.ensure_protective_stop("AAPL", 8.0) is None
+        assert ex.api.submitted == []
 
-    def test_trailing_stop_skipped_when_not_held(self, monkeypatch):
+    def test_stop_skipped_when_not_held(self, monkeypatch):
         import engine.executioner as em
         monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": ("0.05", "10")}))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
-        assert ex.ensure_trailing_stop("MSFT", 8.0) is False
+        assert ex.ensure_protective_stop("MSFT", 8.0) is None
+
+    # ---- fractional position -> DAY stop that ratchets up, with backstop ----
+    def test_fractional_position_gets_day_stop(self, monkeypatch):
+        import engine.executioner as em
+        from alpaca.trading.enums import TimeInForce
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.02", "0.5")},
+                                             current_prices={"AAPL": "100.0"}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        msg = ex.ensure_protective_stop("AAPL", 15.0)
+        assert msg is not None and "Fractional" in msg
+        assert len(ex.api.submitted) == 1
+        order = ex.api.submitted[0]
+        assert type(order).__name__ == "StopOrderRequest"
+        assert order.time_in_force == TimeInForce.DAY
+        assert float(order.stop_price) == pytest.approx(85.0)   # entry 100 * (1-0.15)
+
+    def test_fractional_stop_ratchets_up_from_prior(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.02", "0.5")},
+                                             current_prices={"AAPL": "100.0"},
+                                             all_orders=[("AAPL", "fstop-AAPL-90.0000-1700000000")]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        ex.ensure_protective_stop("AAPL", 15.0)
+        # prior protected 90 beats candidate (100*0.85=85) -> level holds at 90, never steps down
+        assert float(ex.api.submitted[0].stop_price) == pytest.approx(90.0)
+
+    def test_fractional_stop_backstop_liquidates_when_breached(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("-0.10", "0.5")},
+                                             current_prices={"AAPL": "88.0"},
+                                             all_orders=[("AAPL", "fstop-AAPL-90.0000-1700000000")]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        msg = ex.ensure_protective_stop("AAPL", 15.0)
+        # current 88 <= protected 90 -> sell now, place no new stop
+        assert ex.api.closed == ["AAPL"]
+        assert ex.api.submitted == []
+        assert "liquidated" in msg.lower()
 
     def test_liquidate_cancels_open_orders_first(self, monkeypatch):
         import engine.executioner as em
@@ -330,8 +460,8 @@ class TestExecutioner:
                             self._client_cls({"AAPL": ("0.05", "10")}, open_order_symbols=["AAPL"]))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
         ex.liquidate_position("AAPL")
-        assert ex.api.canceled == ["oid-AAPL"]        # cancelled the protective stop...
-        assert ex.api.closed == ["AAPL"]              # ...then closed the position
+        assert ex.api.canceled == ["oid-AAPL"]
+        assert ex.api.closed == ["AAPL"]
 
     def test_get_recent_stopouts_without_tag_has_no_pl(self, monkeypatch):
         import engine.executioner as em
@@ -346,8 +476,8 @@ class TestExecutioner:
             {}, closed_stopouts=[("MU", "8", "918.00", "tstop-MU-900.0000-1700000000")]))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
         [(sym, qty, price, pl_pct, pl_usd)] = ex.get_recent_stopouts(hours=24)
-        assert pl_pct == pytest.approx(2.0)      # 900 -> 918 = +2%
-        assert pl_usd == pytest.approx(144.0)    # 18 * 8 shares
+        assert pl_pct == pytest.approx(2.0)
+        assert pl_usd == pytest.approx(144.0)
 
     def test_position_fetch_failure_raises(self, monkeypatch):
         import engine.executioner as em
@@ -355,9 +485,9 @@ class TestExecutioner:
             def __init__(self, *a, **k): pass
             def get_all_positions(self): raise RuntimeError("request timed out")
         monkeypatch.setattr(em, "TradingClient", BoomClient)
-        monkeypatch.setattr(em.time, "sleep", lambda *a, **k: None)   # no real waiting
+        monkeypatch.setattr(em.time, "sleep", lambda *a, **k: None)
         with pytest.raises(Exception):
-            em.AlpacaExecutioner("k", "s", paper=True)   # __init__ calls refresh_positions
+            em.AlpacaExecutioner("k", "s", paper=True)
 
 
 # ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
@@ -370,11 +500,14 @@ class TestControllerOrchestration:
             cash_reserve_pct = 0.15
             def __init__(self, *a, **k): pass
             def usable_budget(self, bp): return bp
-            def calculate_shares(self, price, buying_power=None, multiplier=1.0):
-                if buying_power is not None and buying_power < price:
-                    return 0
-                return int(42 * multiplier)
-            
+            def base_allocation(self, usable_budget_usd, not_held_count):
+                return usable_budget_usd / max(1, not_held_count)
+            def calculate_shares(self, current_price, base_allocation_usd,
+                                 remaining_budget_usd=None, conviction_multiplier=1.0,
+                                 allow_fractional=False):
+                if remaining_budget_usd is not None and remaining_budget_usd < current_price:
+                    return 0, False
+                return int(42 * conviction_multiplier), False
 
         from engine.sentiment import SentimentReport
         class FakeSentiment:
@@ -383,7 +516,6 @@ class TestControllerOrchestration:
                     sentiment_multiplier=1.0, veto=False, rationale="neutral", headlines=[])
         monkeypatch.setattr(lc, "SentimentAnalyzer", FakeSentiment)
         monkeypatch.setattr(lc, "SENTIMENT_MODE", sentiment_mode)
-
 
         class FakeNotifier:
             def __init__(self): self.msgs = []
@@ -394,14 +526,15 @@ class TestControllerOrchestration:
             def is_holding(self, t): return held
             def get_unrealized_pl_pct(self, t): return 3.0
             def get_buying_power(self): return buying_power
+            def fractionable(self, t): return True
             def execute_market_buy(self, t, q): self.buys.append((t, q))
             def liquidate_position(self, t): self.sells.append(t)
             def refresh_positions(self): pass
             def refresh_open_orders(self): pass
             def held_symbols(self): return ["AAPL"] if held else []
             def get_recent_stopouts(self, hours=24): return []
-            def ensure_trailing_stop(self, t, pct):
-                self.stops.append((t, pct)); return True
+            def ensure_protective_stop(self, t, pct):
+                self.stops.append((t, pct)); return f"stop attached {t}"
         holder = {}
         monkeypatch.setattr(lc, "load_profiles", lambda: {
             "AAPL": {"best_short_window": 5, "best_long_window": 20, "rsi_period": 14}})

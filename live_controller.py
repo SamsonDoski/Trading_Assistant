@@ -8,7 +8,8 @@ from utils.notifier import DiscordNotifier
 from engine.scanner import StrategyScanner
 from engine.allocator import PortfolioAllocator
 from engine.executioner import AlpacaExecutioner
-from config import TRAILING_STOP_PERCENT, SENTIMENT_MODE, CASH_RESERVE_PCT
+from config import (TRAILING_STOP_PERCENT, SENTIMENT_MODE, CASH_RESERVE_PCT,
+                    ALLOW_FRACTIONAL, MIN_FRACTIONAL_NOTIONAL_USD)
 from engine.sentiment import SentimentAnalyzer
 
 
@@ -23,7 +24,9 @@ def run_live_pipeline():
     # 1. Wire up the micro-modules
     notifier = DiscordNotifier()
     scanner = StrategyScanner()
-    allocator = PortfolioAllocator(cash_reserve_pct=CASH_RESERVE_PCT)
+    allocator = PortfolioAllocator(
+            cash_reserve_pct=CASH_RESERVE_PCT,
+            min_fractional_notional_usd=MIN_FRACTIONAL_NOTIONAL_USD,)
     sentiment = SentimentAnalyzer()
 
     api_key = os.getenv("ALPACA_API_KEY")
@@ -47,11 +50,17 @@ def run_live_pipeline():
         f"{greeting}, Olajide. Running Trading Assistant Engine..."
     )
 
-    # Session budget: real buying power minus the standing cash reserve.
+    # Session budget: deployable buying power after the cash reserve, split
+    # equally across the watchlist names we don't already hold. That slice is
+    # the pre-conviction base; sentiment scales it per buy.
     buying_power = executioner.get_buying_power()
-    budget = allocator.usable_budget(buying_power)
+    usable_budget_usd = allocator.usable_budget(buying_power)
+    remaining_budget_usd = usable_budget_usd
+    not_held_count = sum(1 for t in profiles if not executioner.is_holding(t))
+    base_allocation_usd = allocator.base_allocation(usable_budget_usd, not_held_count)
     bp_msg = (f"💰 Buying power: ${buying_power:,.2f} | "
-              f"deployable after {allocator.cash_reserve_pct:.0%} cash reserve: ${budget:,.2f}")
+              f"deployable after {allocator.cash_reserve_pct:.0%} reserve: ${usable_budget_usd:,.2f} | "
+              f"{not_held_count} names open → base ${base_allocation_usd:,.2f}/position")
     print(bp_msg)
     notifier.send_message(bp_msg)
 
@@ -109,15 +118,32 @@ def run_live_pipeline():
                 if SENTIMENT_MODE == "live" and report.veto:
                     state_msg = f"⛔ BUY VETOED by sentiment — {report.rationale}"
                 else:
-                    multiplier = report.sentiment_multiplier if SENTIMENT_MODE == "live" else 1.0
-                    qty = allocator.calculate_shares(price, budget, multiplier)
-                    if qty > 0:
-                        executioner.execute_market_buy(ticker, qty)
-                        budget -= qty * price
-                        state_msg = f"🚀 BUY EXECUTED: {qty} shares @ ${price:.2f} (BP left: ${budget:,.0f})"
+                    conviction_multiplier = (report.sentiment_multiplier
+                                             if SENTIMENT_MODE == "live" else 1.0)
+                    shares, is_fractional = allocator.calculate_shares(
+                        current_price=price,
+                        base_allocation_usd=base_allocation_usd,
+                        remaining_budget_usd=remaining_budget_usd,
+                        conviction_multiplier=conviction_multiplier,
+                        allow_fractional=ALLOW_FRACTIONAL,
+                    )
+                    if is_fractional and not executioner.fractionable(ticker):
+                        state_msg = (f"⏸️ BUY signal — one whole share (${price:.2f}) exceeds this "
+                                     f"position's ${base_allocation_usd * conviction_multiplier:,.2f} "
+                                     f"budget and {ticker} isn't fractionable. Skipped.")
+                    elif shares > 0:
+                        executioner.execute_market_buy(ticker, shares)
+                        remaining_budget_usd -= shares * price
+                        if is_fractional:
+                            fill_desc = f"{shares:.4f} fractional shares"
+                            stop_desc = "software-trailing DAY stop"
+                        else:
+                            fill_desc = f"{int(shares)} shares"
+                            stop_desc = "trailing stop"
+                        state_msg = (f"🚀 BUY EXECUTED: {fill_desc} @ ${price:.2f} "
+                                     f"[{stop_desc}] (deployable left: ${remaining_budget_usd:,.0f})")
                     else:
                         state_msg = "⏸️ BUY signal — skipped, insufficient deployable budget."
-
 
             elif latest_signal == 0 and holding:
                 pl = executioner.get_unrealized_pl_pct(ticker)
@@ -154,10 +180,10 @@ def run_live_pipeline():
     executioner.refresh_positions()
     executioner.refresh_open_orders()
     for ticker in executioner.held_symbols():
-        if executioner.ensure_trailing_stop(ticker, TRAILING_STOP_PERCENT):
-            msg = f"🛡️ **{ticker}** | Trailing stop {TRAILING_STOP_PERCENT}% attached."
-            print(msg)
-            notifier.send_message(msg)
+        status_msg = executioner.ensure_protective_stop(ticker, TRAILING_STOP_PERCENT)
+        if status_msg:
+            print(status_msg)
+            notifier.send_message(status_msg)
 
     print("✅ V4.0 Pipeline Execution Complete.")
 

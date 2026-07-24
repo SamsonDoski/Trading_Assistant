@@ -42,3 +42,16 @@ SENTIMENT_MODE = "live"
 # Capital Policy
 # -----------------
 CASH_RESERVE_PCT = 0.15   # fraction of buying power always held back as cash
+
+# -----------------
+# Position Sizing (V4.1 — equal-weight, small-account aware)
+# -----------------
+# Deployable capital is split equally across every watchlist name NOT currently
+# held:  base_allocation_usd = usable_budget_usd / not_held_count.
+# The sentiment conviction_multiplier then scales that slice. There is NO flat
+# cap — this auto-scales from a $400 account to a $1M account. When a slice is
+# worth less than one whole share, the allocator falls back to a fractional buy.
+ALLOW_FRACTIONAL = True
+
+# Skip a fractional buy whose dollar size is below this — avoids buying dust.
+MIN_FRACTIONAL_NOTIONAL_USD = 1.00

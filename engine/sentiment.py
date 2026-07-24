@@ -34,7 +34,7 @@ def _neutral(headlines=None):
 
 
 SYSTEM_PROMPT = """You are a financial news analyst for an automated trend-following trading bot.
-You will receive recent headlines for a stock the bot is about to BUY on a technical signal.
+You will receive recent news items (each a headline, plus a short summary when available) for a stock the bot is about to BUY on a technical signal.
 Score the news impact on that purchase:
 
 - sentiment_multiplier: position-size multiplier from 0.5 to 1.5.
@@ -47,7 +47,7 @@ Score the news impact on that purchase:
   express it through a low multiplier instead.
 - rationale: one short sentence explaining your call.
 
-Headlines are prefixed with their age, e.g. "[3h ago]". Weight fresher news more
+News items are prefixed with their age, e.g. "[3h ago]". Weight fresher news more
 heavily; older news within the window may already be priced in."""
 
 
@@ -82,10 +82,12 @@ class SentimentAnalyzer:
             self._llm = anthropic.Anthropic(timeout=15.0, max_retries=1)
         return self._llm
 
-    def fetch_headlines(self, ticker, hours=24, limit=10):
-        """Recent headlines for the ticker, each prefixed with its age
-        (e.g. "[3h ago] ...") so the model can weight recency. Empty list on
-        any failure.
+    def fetch_headlines(self, ticker, hours=24, limit=10, summary_chars=300):
+        """Recent news for the ticker as age-prefixed strings, e.g.
+        "[3h ago] Headline — short summary...". Including Alpaca's article
+        summary (free in the same response) gives the model a sentence of
+        context instead of just the title, cutting misleading-headline and
+        wrong-ticker-contamination errors. Empty list on any failure.
 
         Single seam for news sourcing: additional providers plug in here
         (fetch, merge, dedupe) without any caller changing.
@@ -102,17 +104,31 @@ class SentimentAnalyzer:
             items = news.data.get("news", []) if hasattr(news, "data") else []
             headlines = []
             for item in items:
-                headline = getattr(item, "headline", "") or ""
+                headline = (getattr(item, "headline", "") or "").strip()
                 if not headline:
                     continue
+
+                # Alpaca returns a short summary in the same payload — free extra
+                # context. Collapse whitespace, cap the length so a long body
+                # can't blow up the prompt, and drop it if it just echoes the
+                # headline (Benzinga sometimes duplicates).
+                summary = (getattr(item, "summary", "") or "").strip()
+                if summary:
+                    summary = " ".join(summary.split())
+                    if len(summary) > summary_chars:
+                        summary = summary[:summary_chars].rstrip() + "…"
+                    if summary.lower() == headline.lower():
+                        summary = ""
+                text = f"{headline} — {summary}" if summary else headline
+
                 try:
                     created = getattr(item, "created_at", None)
                     age_h = (now - created).total_seconds() / 3600.0
                     if age_h > hours:
                         continue     # skip any news that slipped past the filter
-                    headlines.append(f"[{max(age_h, 0):.0f}h ago] {headline}")
+                    headlines.append(f"[{max(age_h, 0):.0f}h ago] {text}")
                 except Exception:
-                    headlines.append(headline)   # keep the headline even if its timestamp is unusable
+                    headlines.append(text)   # keep the item even if its timestamp is unusable
             return headlines
         except Exception as e:
             print(f"⚠️ News fetch failed for {ticker}: {e}")

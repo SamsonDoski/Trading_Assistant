@@ -12,8 +12,23 @@ into a wired, full-behavior system, and preserves the V3.1 decoupled architectur
 core mechanism is dependency injection: modules read a single resolved **settings object**
 instead of importing hardcoded constants.
 
-Backward compatibility is a hard requirement: `ACTIVE_MODE = "Swing"` must reproduce
-current V4.0 behavior exactly, so V5.0 can ship dark and be validated before any mode flip.
+Backward compatibility is the ship-dark safety anchor, not the destination.
+`ACTIVE_MODE = "Swing"` reproduces current V4.0 behavior exactly — same behavior
+flags, inheriting each ticker's legacy free-optimized windows — so V5.0 deploys
+with zero behavioral change and is proven regression-free before any flip.
+
+But V4.0 is itself an incoherent hybrid: it applies ONE uniform swing-like
+behavior (15% trailing stop, single entry, exit-on-reversal) to per-ticker
+windows that actually span aggressive (CRWV 5/10) to long-term (QQQ 50/350)
+families. So a long-trend name gets a swing stop that can shake it out of the
+very trend its slow windows were chosen to ride — entry timeframe and exit
+timeframe disagree.
+
+The intended production end-state is `ACTIVE_MODE = "Auto"`, where the research
+layer assigns each ticker a COHERENT mode (matching window family AND behavior),
+resolving that mismatch. Migration path: ship dark on Swing (prove no
+regression) -> per-mode research (Phase 4) -> flip to Auto (coherent per-ticker
+modes). Swing is the checkpoint; Auto is the goal.
 
 ### 2. Architecture Additions / Changes
 * **New:** `engine/modes.py` — `TRADING_MODES` definitions + `ModeResolver` (resolves the
@@ -29,7 +44,55 @@ current V4.0 behavior exactly, so V5.0 can ship dark and be validated before any
 * **Modified:** `research/run_optimizer.py` + `research/researcher.py` — per-mode grid search
   and best-mode selection; extend `stock_profile.json` schema with per-ticker best mode + params.
 
-### 3. The Mode Contract
+
+### 3. Execution Roadmap
+Each phase is an independently mergeable, tested increment. Phases 1–2 are pure
+additions (no behavior change). Phase 3 is the cutover. No mode other than Swing
+reaches production until Phase 6.
+
+**Phase 1 — Mode definitions (`engine/modes.py`)**
+* `ModeSettings` frozen dataclass + `TRADING_MODES` (Aggressive/Swing/Long_Term/
+  Volatile) + `ModeResolver`. Wired to nothing.
+* Gate: `test_swing_matches_v4_behavior` passes; existing suite and live behavior unchanged.
+
+**Phase 2 — Strategy honors mode thresholds (`strategies/ma_rsi_combo.py`)**
+* Replace hardcoded `RSI < 55` with `rsi_buy_threshold`; add optional
+  `sell_on_overbought` / `rsi_sell_threshold`.
+* Defaults preserve current behavior (55, overbought off).
+* Gate: regression test proves identical signals under Swing defaults.
+
+**Phase 3 — Settings threaded through the pipeline (CUTOVER)**
+* Controller / executioner / allocator read a resolved `ModeSettings` instead of
+  importing config constants (`TRAILING_STOP_PERCENT`, `CASH_RESERVE_PCT`,
+  sentiment, conviction band); honor `exit_on_trend_reversal` and
+  `allow_multi_entry` (RSI-recovery trigger + cooldown). Add `config.ACTIVE_MODE`
+  (Lambda env var).
+* Gate: with `ACTIVE_MODE="Swing"`, every existing controller test passes
+  unchanged. On green, `mainV5.0` becomes the default branch.
+
+**Phase 4 — Per-mode research + schema (`research/run_optimizer.py`, `researcher.py`)**
+* Grid search scoped to each mode's window family; `select_best_mode` ranks all
+  four by risk-adjusted return.
+* Extend `stock_profile.json` with `best_mode` + `best_windows[mode]` (additive,
+  backward-compatible); migrate legacy flat windows into `best_windows["Swing"]`.
+* Gate: research populates a coherent best mode + windows per ticker.
+
+**Phase 5 — Auto mode**
+* Resolver consumes `best_mode` / `best_windows`; retire the transitional
+  legacy-window bridge in `_resolve_windows`.
+* Gate: Auto resolves each ticker to its researched mode.
+
+**Phase 6 — Validation (backtest each mode) — HARD GATE**
+* Extend the backtest harness to score each mode and Auto vs buy-and-hold, with
+  max-drawdown and Sharpe, including a bear sub-window.
+* Gate: no mode is promoted to production until it clears this. Machinery may
+  ship on Swing before Phase 6; non-Swing modes may not.
+
+**Phase 7 — Production flip**
+* Set `ACTIVE_MODE="Auto"` (or a chosen mode) via env var. Instant rollback =
+  `"Swing"`.
+
+### 4. The Mode Contract
 Each mode is a bundle of the following fields.
 
 **Entry:** `ma_short`, `ma_long`, `rsi_window`, `rsi_buy_threshold`,
@@ -59,7 +122,7 @@ Each mode is a bundle of the following fields.
 mode and optimized parameters the research layer stored as best in `stock_profile.json`.
 Requires Phase 4 to have run; falls back to `Swing` for any ticker without a stored best mode.
 
-### 4. Per-Mode Research (Grid Search)
+### 5. Per-Mode Research (Grid Search)
 The optimizer's grid search is scoped to each mode's window family, so a mode is tuned
 only within its own regime:
 
@@ -72,7 +135,7 @@ only within its own regime:
 `select_best_mode(ticker)` runs all four, ranks by the chosen metric (risk-adjusted return),
 and records `best_mode` + its params. `Auto` consumes that record.
 
-### 5. Algorithmic Logic Changes
+### 6. Algorithmic Logic Changes
 * Buy threshold is now `rsi_buy_threshold` (was hardcoded 55) — modes finally differ on entry depth.
 * `exit_on_trend_reversal` gates the MA cross-down sell (true for all shipped modes; the flag
   exists so a future pure-hold mode can set it false).
@@ -83,7 +146,7 @@ and records `best_mode` + its params. `Auto` consumes that record.
 * Stops consolidated: `trailing_stop_percent` is the single exit-protection; the legacy
   signal-level `stop_loss_pct` in the combo is retired.
 
-### 6. Testing Requirements (mocked; extends the existing offline suite)
+### 7. Testing Requirements (mocked; extends the existing offline suite)
 * `modes.py`: resolver returns the correct bundle per mode; `Auto` reads the stored best mode
   and falls back to Swing when absent; unknown mode defaults to Swing.
 * `ma_rsi_combo`: buys at `rsi_buy_threshold` not 55; `sell_on_overbought` triggers only when enabled.
@@ -92,7 +155,7 @@ and records `best_mode` + its params. `Auto` consumes that record.
 * `research`: per-mode grid search stays within its window family; `select_best_mode` records a winner.
 * Regression: `ACTIVE_MODE="Swing"` reproduces V4.0 numbers on the existing controller tests.
 
-### 7. Known Risks & Edge Cases
+### 8. Known Risks & Edge Cases
 1. Behavior divergence: modes must stay parameter+flag bundles; deep per-mode code forks would
    erode the state machine. New behaviors must be flag-gated.
 2. Schema drift: `stock_profile.json` gains fields; missing fields must fall back gracefully
@@ -103,11 +166,11 @@ and records `best_mode` + its params. `Auto` consumes that record.
 5. Long_Term with no stop: a genuine reversal that never death-crosses could ride a large drawdown.
    This is intentional (position trading), but must be a conscious user choice.
 
-### 8. Migration & Rollback
+### 9. Migration & Rollback
 Ships behind `ACTIVE_MODE="Swing"` (== V4.0). Rollback at any point = set `ACTIVE_MODE="Swing"`
 (no redeploy if it is an env var) or revert the merge. Schema changes are additive and
 backward-compatible.
 
-### 9. Deferred
+### 10. Deferred
 Portfolio risk layer (kill switch, daily-loss circuit breaker) remains separate and pending.
 Walk-forward validation of the per-mode grids. Per-mode sentiment prompt tuning.

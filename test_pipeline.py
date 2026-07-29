@@ -835,8 +835,10 @@ def test_entrypoint_modules_import():
               "research.researcher", "research.backtest", "utils.visualize1",
               "utils.data_loader", "utils.profile_manager", "strategy_config",
               "config", "engine.scanner", "engine.allocator", "engine.executioner",
-              "utils.notifier"):
+              "engine.modes", "utils.notifier"):
         importlib.import_module(m)
+
+
 
 
 
@@ -971,6 +973,151 @@ class TestSentiment:
         [h] = a.fetch_headlines("NVDA", summary_chars=50)
         assert h.endswith("…")
         assert len(h) < 200              # bounded, not the full 1000 chars
+
+
+
+
+        # ================================================================ NEW: V5.0 trading modes
+class TestTradingModes:
+    def test_all_modes_well_formed(self):
+        from engine.modes import TRADING_MODES
+        for name in ("Aggressive", "Swing", "Long_Term", "Volatile"):
+            m = TRADING_MODES[name]
+            assert m.name == name
+            assert m.ma_short < m.ma_long
+            assert 0 < m.rsi_buy_threshold <= 100
+            assert m.conviction_min <= m.conviction_max
+            assert 0 <= m.cash_reserve_pct < 1
+
+    def test_swing_matches_v4_behavior(self):
+        # Backward-compat guard: Swing must equal the deployed V4.0 constants.
+        from engine.modes import TRADING_MODES
+        import config
+        s = TRADING_MODES["Swing"]
+        assert s.trailing_stop_percent == config.TRAILING_STOP_PERCENT
+        assert s.cash_reserve_pct == config.CASH_RESERVE_PCT
+        assert s.sentiment_enabled is True        # SENTIMENT_MODE == "live"
+        assert s.rsi_buy_threshold == 55          # current hardcoded combo threshold
+        assert s.allow_multi_entry is False       # current single-entry
+
+    def test_long_term_holds_with_no_stop(self):
+        from engine.modes import TRADING_MODES
+        lt = TRADING_MODES["Long_Term"]
+        assert lt.trailing_stop_percent is None
+        assert lt.exit_on_trend_reversal is True
+        assert lt.sentiment_enabled is False
+
+    def test_settings_are_immutable(self):
+        import dataclasses
+        from engine.modes import TRADING_MODES
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            TRADING_MODES["Swing"].ma_short = 999
+
+
+class TestModeResolver:
+    def test_named_mode_resolves(self):
+        from engine.modes import ModeResolver
+        assert ModeResolver("Aggressive").settings_for().name == "Aggressive"
+
+    def test_unknown_mode_defaults_to_swing(self):
+        from engine.modes import ModeResolver
+        assert ModeResolver("does-not-exist").settings_for().name == "Swing"
+
+    def test_auto_uses_profile_best_mode(self):
+        from engine.modes import ModeResolver
+        s = ModeResolver("Auto").settings_for(profile={"best_mode": "Volatile"})
+        assert s.name == "Volatile"
+
+    def test_auto_falls_back_to_swing(self):
+        from engine.modes import ModeResolver
+        assert ModeResolver("Auto").settings_for(profile={}).name == "Swing"
+        assert ModeResolver("Auto").settings_for(profile=None).name == "Swing"
+
+    def test_swing_inherits_legacy_per_ticker_windows(self):
+        # Backward compat: Swing (default) uses the ticker's V4.0-optimized windows.
+        from engine.modes import ModeResolver
+        s = ModeResolver("Swing").settings_for(
+            profile={"best_short_window": 7, "best_long_window": 33})
+        assert s.ma_short == 7 and s.ma_long == 33
+
+    def test_non_default_mode_ignores_legacy_flat_windows(self):
+        from engine.modes import ModeResolver, TRADING_MODES
+        s = ModeResolver("Long_Term").settings_for(
+            profile={"best_short_window": 7, "best_long_window": 33})
+        assert s.ma_short == TRADING_MODES["Long_Term"].ma_short   # 50, not 7
+        assert s.ma_long == TRADING_MODES["Long_Term"].ma_long     # 200, not 33
+
+    def test_per_mode_researched_windows_win(self):
+        from engine.modes import ModeResolver
+        s = ModeResolver("Long_Term").settings_for(
+            profile={"best_windows": {"Long_Term": {"short": 60, "long": 250}}})
+        assert s.ma_short == 60 and s.ma_long == 250
+
+    def test_auto_combines_best_mode_and_its_windows(self):
+        from engine.modes import ModeResolver
+        s = ModeResolver("Auto").settings_for(profile={
+            "best_mode": "Aggressive",
+            "best_windows": {"Aggressive": {"short": 8, "long": 24}},
+        })
+        assert s.name == "Aggressive" and s.ma_short == 8 and s.ma_long == 24
+
+
+# ================================================================ NEW: V5.0 combo mode thresholds
+class TestComboModeThresholds:
+    def _oscillating_uptrend(self, n=400, amp=20.0):
+        # Rising trend (MA_short > MA_long) with a big oscillation so RSI both
+        # dips below the buy line and runs above the overbought line.
+        t = np.arange(n)
+        return make_price_df(100 + 0.2 * t + amp * np.sin(t / 8.0))
+
+    def test_default_params_reproduce_v4_signals(self):
+        # Backward-compat guard: new defaults == the old hardcoded behavior.
+        from strategies.ma_rsi_combo import apply_combo_strategy
+        df = self._oscillating_uptrend()
+        a = apply_combo_strategy(df.copy(), short_window=5, long_window=20, rsi_window=14)
+        b = apply_combo_strategy(df.copy(), short_window=5, long_window=20, rsi_window=14,
+                                 rsi_buy_threshold=55, sell_on_overbought=False,
+                                 stop_loss_pct=-0.15)
+        assert (a["Signal"].values == b["Signal"].values).all()
+
+    def test_lower_buy_threshold_never_buys_more(self):
+        from strategies.ma_rsi_combo import apply_combo_strategy
+        df = self._oscillating_uptrend()
+        loose = apply_combo_strategy(df.copy(), 5, 20, 14, rsi_buy_threshold=55)
+        strict = apply_combo_strategy(df.copy(), 5, 20, 14, rsi_buy_threshold=35)
+        # A deeper (lower) entry threshold requires deeper dips -> at most as many buy bars.
+        assert (strict["Signal"] == 1).sum() <= (loose["Signal"] == 1).sum()
+
+    def test_sell_on_overbought_forces_exit(self):
+        from strategies.ma_rsi_combo import apply_combo_strategy
+        df = self._oscillating_uptrend()
+        held = apply_combo_strategy(df.copy(), 5, 20, 14, sell_on_overbought=False)
+        assert held["RSI"].max() >= 70                      # precondition: series reaches overbought
+        scalped = apply_combo_strategy(df.copy(), 5, 20, 14,
+                                       sell_on_overbought=True, rsi_sell_threshold=70)
+        assert (scalped["Signal"] == 1).sum() <= (held["Signal"] == 1).sum()   # never holds more
+        assert (scalped["Signal"].values != held["Signal"].values).any()        # and it changed something
+
+    def test_none_stop_disables_signal_stop(self):
+        from strategies.ma_rsi_combo import apply_combo_strategy
+        # Long sustained rise (MA_long ends far BELOW price, so a pullback cannot
+        # trigger the MA cross-down exit), then a sharp ~17% decline. RSI falls
+        # under 55 a few bars into the decline -> entry; price then keeps falling,
+        # so the -5% signal stop is the ONLY exit that can fire. With stop=None
+        # the position is held through the whole decline.
+        prices = list(np.linspace(100, 400, 300)) + list(np.linspace(400, 330, 25))
+        df = make_price_df(prices)
+        tight = apply_combo_strategy(df.copy(), 5, 200, 14, stop_loss_pct=-0.05)
+        nostop = apply_combo_strategy(df.copy(), 5, 200, 14, stop_loss_pct=None)
+
+        held_nostop = (nostop["Signal"] == 1).sum()
+        held_tight = (tight["Signal"] == 1).sum()
+        assert held_nostop > 0                  # precondition: an entry actually happened
+        assert held_nostop > held_tight         # the -5% stop cut the position short
+        assert (nostop["Signal"].values != tight["Signal"].values).any()
+        for out in (tight, nostop):
+            assert "Entry_Price" not in out.columns and "Trade_Return" not in out.columns
+
 # ================================================================ documented exclusions
 @pytest.mark.skip(reason="Manual live-account scripts: they touch Alpaca at import "
                          "(v3_first_order.py even places an order). Not unit-testable "

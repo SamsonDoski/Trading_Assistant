@@ -134,8 +134,9 @@ class SentimentAnalyzer:
             print(f"⚠️ News fetch failed for {ticker}: {e}")
             return []
 
-    def get_verdict(self, ticker):
-        """SentimentReport for a buy candidate. Neutral on any failure."""
+    def get_verdict(self, ticker, conviction_min=MULTIPLIER_MIN, conviction_max=MULTIPLIER_MAX):
+        """SentimentReport for a buy candidate. Neutral on any failure.
+        The clamp band is mode-driven (Aggressive allows up to 1.8)."""
         headlines = self.fetch_headlines(ticker)
         if not headlines:
             print(f"📰 {ticker}: no recent news — neutral sentiment.")
@@ -157,7 +158,7 @@ class SentimentAnalyzer:
             report = SentimentReport(
                 # Clamp defensively — the schema asks for 0.5-1.5 but we enforce it.
                 sentiment_multiplier=max(
-                    MULTIPLIER_MIN, min(MULTIPLIER_MAX, verdict.sentiment_multiplier)
+                    conviction_min, min(conviction_max, verdict.sentiment_multiplier)
                 ),
                 veto=verdict.veto,
                 rationale=verdict.rationale,

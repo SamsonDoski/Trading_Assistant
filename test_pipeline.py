@@ -240,21 +240,44 @@ class TestAllocator:
 
 # ================================================================ NEW: scanner
 class TestScanner:
+    @staticmethod
+    def _settings(**over):
+        from engine.modes import TRADING_MODES
+        from dataclasses import replace
+        return replace(TRADING_MODES["Swing"], ma_short=5, ma_long=20, rsi_window=14, **over)
+
     def test_get_signals_contract(self, monkeypatch):
         import engine.scanner as sm
         t = np.arange(400)
         fake = make_price_df(100 + 0.5 * t + 8 * np.sin(t / 10.0))
         monkeypatch.setattr(sm, "fetch_data", lambda *a, **k: fake.copy())
-        d = sm.StrategyScanner().get_signals("AAPL", 5, 20, 14)
-        assert set(d) == {"latest_signal", "previous_signal",
-                          "current_price", "current_rsi"}
+        d = sm.StrategyScanner().get_signals("AAPL", self._settings())
+        assert set(d) == {"latest_signal", "previous_signal", "current_price",
+                          "current_rsi", "previous_rsi"}
         assert d["latest_signal"] in (0, 1)
         assert 0 <= d["current_rsi"] <= 100
 
     def test_get_signals_empty_returns_none(self, monkeypatch):
         import engine.scanner as sm
         monkeypatch.setattr(sm, "fetch_data", lambda *a, **k: pd.DataFrame())
-        assert sm.StrategyScanner().get_signals("X", 5, 20, 14) is None
+        assert sm.StrategyScanner().get_signals("X", self._settings()) is None
+
+    def test_mode_threshold_reaches_the_strategy(self, monkeypatch):
+        # A deep buy threshold must produce no more long bars than a loose one.
+        import engine.scanner as sm
+        t = np.arange(400)
+        fake = make_price_df(100 + 0.2 * t + 20 * np.sin(t / 8.0))
+        seen = {}
+        real = sm.apply_combo_strategy
+        def spy(df, **kw):
+            seen.update(kw)
+            return real(df, **kw)
+        monkeypatch.setattr(sm, "fetch_data", lambda *a, **k: fake.copy())
+        monkeypatch.setattr(sm, "apply_combo_strategy", spy)
+        sm.StrategyScanner().get_signals("X", self._settings(rsi_buy_threshold=35))
+        assert seen["rsi_buy_threshold"] == 35
+        assert seen["stop_loss_pct"] == -0.15        # Swing keeps the V4.0 signal stop
+        
 
 
 # ================================================================ NEW: notifier
@@ -489,13 +512,24 @@ class TestExecutioner:
         with pytest.raises(Exception):
             em.AlpacaExecutioner("k", "s", paper=True)
 
+    def test_no_stop_when_trail_is_none(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": ("0.05", "10")}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.ensure_protective_stop("AAPL", None) is None
+        assert ex.api.submitted == []            # mode runs stopless
+
 
 # ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
 class TestControllerOrchestration:
-    def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0, sentiment_report=None, sentiment_mode="shadow"):
+    def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0,
+              sentiment_report=None, sentiment_mode="shadow", mode="Swing"):
         import live_controller as lc
         class FakeScanner:
-            def get_signals(self, *a, **k): return signals
+            def get_signals(self, *a, **k):
+                if signals is not None:
+                    signals.setdefault("previous_rsi", signals.get("current_rsi"))
+                return signals
         class FakeAllocator:
             cash_reserve_pct = 0.15
             def __init__(self, *a, **k): pass
@@ -508,10 +542,12 @@ class TestControllerOrchestration:
                 if remaining_budget_usd is not None and remaining_budget_usd < current_price:
                     return 0, False
                 return int(42 * conviction_multiplier), False
+            def base_allocation(self, usable_budget_usd, not_held_count):
+                return usable_budget_usd / max(1, not_held_count)
 
         from engine.sentiment import SentimentReport
         class FakeSentiment:
-            def get_verdict(self, t):
+            def get_verdict(self, t, conviction_min=0.5, conviction_max=1.5):
                 return sentiment_report or SentimentReport(
                     sentiment_multiplier=1.0, veto=False, rationale="neutral", headlines=[])
         monkeypatch.setattr(lc, "SentimentAnalyzer", FakeSentiment)
@@ -527,6 +563,7 @@ class TestControllerOrchestration:
             def get_unrealized_pl_pct(self, t): return 3.0
             def get_buying_power(self): return buying_power
             def fractionable(self, t): return True
+            def days_since_last_buy(self, t, lookback_days=90): return float("inf")
             def execute_market_buy(self, t, q): self.buys.append((t, q))
             def liquidate_position(self, t): self.sells.append(t)
             def refresh_positions(self): pass
@@ -543,6 +580,7 @@ class TestControllerOrchestration:
         monkeypatch.setattr(lc, "PortfolioAllocator", FakeAllocator)
         monkeypatch.setattr(lc, "DiscordNotifier", FakeNotifier)
         monkeypatch.setattr(lc.time, "sleep", lambda *a, **k: None)
+        monkeypatch.setattr(lc, "ACTIVE_MODE", mode)
         def make_exec(*a, **k):
             holder["exec"] = FakeExec(); return holder["exec"]
         monkeypatch.setattr(lc, "AlpacaExecutioner", make_exec)
@@ -576,7 +614,7 @@ class TestControllerOrchestration:
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
             "current_price": 200.0, "current_rsi": 50.0}, held=True)
         lc.run_live_pipeline()
-        assert h["exec"].stops == [("AAPL", lc.TRAILING_STOP_PERCENT)]
+        assert h["exec"].stops == [("AAPL", 15.0)]   # Swing mode's trailing stop
 
 
     def test_buy_skipped_when_insufficient_buying_power(self, monkeypatch):
@@ -1117,6 +1155,98 @@ class TestComboModeThresholds:
         assert (nostop["Signal"].values != tight["Signal"].values).any()
         for out in (tight, nostop):
             assert "Entry_Price" not in out.columns and "Trade_Return" not in out.columns
+
+
+
+# ================================================================ NEW: V5.0 mode-driven controller behavior
+class TestControllerModes(TestControllerOrchestration):
+    def test_swing_is_the_v4_baseline(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False, mode="Swing")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == [("AAPL", 42)]     # fresh-crossover buy, baseline size
+        # (Swing's stop attachment is covered by test_protection_pass_attaches_trailing_stop)        # Swing trailing stop
+
+    def test_long_term_attaches_no_stop(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 50.0}, held=True, mode="Long_Term")
+        lc.run_live_pipeline()
+        assert h["exec"].stops == [("AAPL", None)]           # executioner skips on None
+
+    def test_long_term_skips_sentiment(self, monkeypatch):
+        from engine.sentiment import SentimentReport
+        bullish = SentimentReport(sentiment_multiplier=1.5, veto=False,
+                                  rationale="great", headlines=[])
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 30.0}, held=False,
+            sentiment_report=bullish, sentiment_mode="live", mode="Long_Term")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == [("AAPL", 42)]              # 1.0x, not 63 — sentiment off
+
+    def test_hold_through_when_exit_flag_off(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 0, "previous_signal": 1,
+            "current_price": 180.0, "current_rsi": 60.0}, held=True, mode="Swing")
+        import engine.modes as mm
+        from dataclasses import replace
+        holder = replace(mm.TRADING_MODES["Swing"], exit_on_trend_reversal=False)
+        monkeypatch.setitem(mm.TRADING_MODES, "Swing", holder)
+        lc.run_live_pipeline()
+        assert h["exec"].sells == []                         # reversal ignored
+
+    def test_multi_entry_requires_rsi_turning_up(self, monkeypatch):
+        # Aggressive allows re-entry, but RSI still FALLING must not buy.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 40.0, "previous_rsi": 45.0},
+            held=False, mode="Aggressive")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == []
+
+    def test_multi_entry_buys_the_recovery(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
+            held=False, mode="Aggressive")
+        lc.run_live_pipeline()
+        assert len(h["exec"].buys) == 1                      # RSI dipped and turned up
+
+    def test_multi_entry_blocked_by_cooldown(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
+            held=False, mode="Aggressive")
+        h_exec = {}
+        real_make = lc.AlpacaExecutioner
+        def make(*a, **k):
+            ex = real_make(*a, **k)
+            ex.days_since_last_buy = lambda t, lookback_days=90: 0.5   # inside 2-day cooldown
+            h_exec["ex"] = ex
+            return ex
+        monkeypatch.setattr(lc, "AlpacaExecutioner", make)
+        lc.run_live_pipeline()
+        assert h_exec["ex"].buys == []
+
+    def test_multi_entry_blocked_when_history_unreadable(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
+            held=False, mode="Aggressive")
+        real_make = lc.AlpacaExecutioner
+        h_exec = {}
+        def make(*a, **k):
+            ex = real_make(*a, **k)
+            ex.days_since_last_buy = lambda t, lookback_days=90: None  # unreadable
+            h_exec["ex"] = ex
+            return ex
+        monkeypatch.setattr(lc, "AlpacaExecutioner", make)
+        lc.run_live_pipeline()
+        assert h_exec["ex"].buys == []          # never authorize on unverifiable cooldown
+
+    def test_swing_single_entry_unchanged(self, monkeypatch):
+        # Same setup as the recovery test, but Swing must NOT re-enter.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
+            held=False, mode="Swing")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == []
+
+    
 
 # ================================================================ documented exclusions
 @pytest.mark.skip(reason="Manual live-account scripts: they touch Alpaca at import "

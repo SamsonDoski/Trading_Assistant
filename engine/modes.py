@@ -37,6 +37,7 @@ class ModeSettings:
     conviction_max: float
     cash_reserve_pct: float
     allow_fractional: bool
+    signal_stop_loss_pct: float | None    # combo signal-level hard stop; None = rely on the broker stop
 
 
 TRADING_MODES = {
@@ -48,6 +49,8 @@ TRADING_MODES = {
         sell_on_overbought=True, rsi_sell_threshold=80,
         sentiment_enabled=True, conviction_min=0.5, conviction_max=1.8,
         cash_reserve_pct=0.10, allow_fractional=True,
+        # Aggressive:  after rsi_sell_threshold=80,
+        signal_stop_loss_pct=None,
     ),
     "Swing": ModeSettings(          # == deployed V4.0 (ship-dark anchor; production target is Auto)
         name="Swing",
@@ -57,6 +60,8 @@ TRADING_MODES = {
         sell_on_overbought=False, rsi_sell_threshold=70,
         sentiment_enabled=True, conviction_min=0.5, conviction_max=1.5,
         cash_reserve_pct=0.15, allow_fractional=True,
+        # Swing:       after rsi_sell_threshold=70,
+        signal_stop_loss_pct=-0.15,      # V4.0 anchor;
     ),
     "Long_Term": ModeSettings(      # hold until the 50/200 trend reverses; no stops
         name="Long_Term",
@@ -66,6 +71,8 @@ TRADING_MODES = {
         sell_on_overbought=False, rsi_sell_threshold=70,
         sentiment_enabled=False, conviction_min=1.0, conviction_max=1.0,
         cash_reserve_pct=0.05, allow_fractional=True,
+        # Long_Term:   after rsi_sell_threshold=70,
+        signal_stop_loss_pct=None,
     ),
     "Volatile": ModeSettings(       # high-vol names (TSLA/NVDA): wide stop, room to breathe
         name="Volatile",
@@ -75,6 +82,8 @@ TRADING_MODES = {
         sell_on_overbought=False, rsi_sell_threshold=70,
         sentiment_enabled=True, conviction_min=0.5, conviction_max=1.5,
         cash_reserve_pct=0.20, allow_fractional=True,
+        # Volatile:    after rsi_sell_threshold=70,
+        signal_stop_loss_pct=None,
     ),
 }
 
@@ -100,14 +109,32 @@ class ModeResolver:
         return name if name in self.modes else self.default
 
     def settings_for(self, profile=None):
-        """Return the ready-to-use ModeSettings for one ticker's profile, with MA
-        windows resolved by the precedence in _resolve_windows."""
+        """Ready-to-use ModeSettings for one ticker, with MA windows and RSI period
+        resolved by the precedence rules below."""
         name = self.mode_name_for(profile)
         settings = self.modes[name]
         short, long = self._resolve_windows(settings, name, profile)
-        if (short, long) != (settings.ma_short, settings.ma_long):
-            settings = replace(settings, ma_short=short, ma_long=long)
+        rsi_window = self._resolve_rsi_window(settings, name, profile)
+        if (short, long, rsi_window) != (settings.ma_short, settings.ma_long, settings.rsi_window):
+            settings = replace(settings, ma_short=short, ma_long=long, rsi_window=rsi_window)
         return settings
+
+    def _resolve_rsi_window(self, settings, name, profile):
+        """TRANSITIONAL bridge, same rule as the window bridge: V4.0 read a flat
+        `rsi_period` off the profile, so it belongs to the DEFAULT (Swing) mode."""
+        profile = profile or {}
+        if name == self.default:
+            rsi = profile.get("rsi_period")
+            if rsi is not None:
+                return rsi
+        return settings.rsi_window
+
+    def portfolio_settings(self):
+        """Account-level settings (cash reserve) for the whole run. These cannot be
+        per-ticker — one budget can't honor 24 different reserves — so Auto uses
+        the default mode's account policy."""
+        name = self.active_mode if self.active_mode in self.modes else self.default
+        return self.modes[name]
 
     def _resolve_windows(self, settings, name, profile):
         """MA-window precedence:

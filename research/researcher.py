@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.profile_manager import load_profiles, save_profiles, is_stale
-from engine.modes import DEFAULT_MODE
 from research.run_optimizer import run_optimization, select_best_mode
 
 
@@ -48,30 +47,6 @@ def update_mode_research(ticker, best_mode, records):
     save_profiles(profiles)
     print(f"\n✅ {ticker}: best_mode={best_mode} "
           f"({best_windows[best_mode]['short']}/{best_windows[best_mode]['long']})")
-
-
-def migrate_flat_windows_to_default_mode():
-    """One-time schema migration: the legacy flat best_short/long_window fields
-    were mode-agnostic; treat them as the DEFAULT (Swing) mode's windows so the
-    transitional bridge in ModeResolver can eventually be retired. Idempotent,
-    and the legacy fields are KEPT so nothing breaks mid-migration."""
-    profiles = load_profiles()
-    migrated = 0
-    for ticker, profile in profiles.items():
-        short = profile.get("best_short_window")
-        long = profile.get("best_long_window")
-        if short is None or long is None:
-            continue
-        best_windows = dict(profile.get("best_windows", {}))
-        if DEFAULT_MODE in best_windows:
-            continue
-        best_windows[DEFAULT_MODE] = {"short": short, "long": long}
-        profile["best_windows"] = best_windows
-        migrated += 1
-    if migrated:
-        save_profiles(profiles)
-    print(f"🔀 Migrated {migrated} profile(s) into best_windows['{DEFAULT_MODE}'].")
-    return migrated
 
 
 def run_research_cycle(tickers, per_mode=False, force=False):
@@ -119,13 +94,8 @@ if __name__ == "__main__":
     ]
     parser = argparse.ArgumentParser(description="Autonomous research cycle")
     parser.add_argument("--modes", action="store_true", help="Per-mode research")
-    parser.add_argument("--migrate", action="store_true",
-                        help="Only migrate legacy windows into best_windows[Swing]")
     parser.add_argument("--force", action="store_true",
                         help="Re-research every ticker, ignoring freshness")
     args = parser.parse_args()
 
-    if args.migrate:
-        migrate_flat_windows_to_default_mode()
-    else:
-        run_research_cycle(master_watchlist, per_mode=args.modes, force=args.force)
+    run_research_cycle(master_watchlist, per_mode=args.modes, force=args.force)

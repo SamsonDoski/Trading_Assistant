@@ -1334,16 +1334,6 @@ class TestProfileSchemaV5:
         assert saved["best_windows"]["Swing"] == {"short": 20, "long": 50}
         assert saved["mode_scores"]["Volatile"]["score"] == 2.5
 
-    def test_migration_is_idempotent(self, monkeypatch, tmp_path):
-        import utils.profile_manager as pm
-        import research.researcher as rsr
-        monkeypatch.setattr(pm, "PROFILE_FILE", str(tmp_path / "p.json"))
-        pm.save_profiles({"AAPL": {"best_short_window": 40, "best_long_window": 100}})
-        assert rsr.migrate_flat_windows_to_default_mode() == 1
-        assert pm.load_profiles()["AAPL"]["best_windows"]["Swing"] == {"short": 40, "long": 100}
-        assert rsr.migrate_flat_windows_to_default_mode() == 0     # no double-migration
-        assert pm.load_profiles()["AAPL"]["best_short_window"] == 40   # legacy kept
-
     def test_resolver_reads_migrated_schema(self, monkeypatch, tmp_path):
         # End-to-end: research output feeds the Phase-1 resolver.
         from engine.modes import ModeResolver

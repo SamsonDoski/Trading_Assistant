@@ -2,16 +2,20 @@
 V5.0 trading modes: named bundles of signal parameters + behavior flags, plus a
 resolver that picks the active bundle per ticker.
 
-Nothing imports this yet (Phase 1). Phase 3 threads a resolved ModeSettings
-through the controller/executioner/allocator in place of hardcoded config
-constants. Backward-compat: "Swing" == deployed V4.0 and is the SHIP-DARK safety anchor,
-not the destination. The intended production end-state is "Auto" (each ticker's
-researched best mode), which fixes V4.0's incoherence of applying one uniform
-swing-like behavior to windows that actually span aggressive -> long-term families.
+Backward-compat: "V4_Legacy" == deployed V4.0 and is the SHIP-DARK safety anchor
+and rollback value. It is NOT a preset: its windows come from the legacy flat
+per-ticker fields (best_short_window/best_long_window), which V4.0 free-searched
+over {5..50}x{10..400} — a space no mode grid can reproduce. "Swing" is a real
+swing-trading preset with its own researched grid, and therefore is NOT V4.0.
+
+The intended production end-state is "Auto" (each ticker's researched best mode),
+which fixes V4.0's incoherence of applying one uniform swing-like behavior to
+windows that actually span aggressive -> long-term families.
 """
 from dataclasses import dataclass, replace
 
-DEFAULT_MODE = "Swing"
+DEFAULT_MODE = "V4_Legacy"
+
 
 
 @dataclass(frozen=True)
@@ -40,7 +44,36 @@ class ModeSettings:
     signal_stop_loss_pct: float | None    # combo signal-level hard stop; None = rely on the broker stop
 
 
+
+# Grid-search space per mode: (short_windows, long_windows). Each mode is tuned
+# ONLY within its own window family, so a "Long_Term" search can never return
+# aggressive windows. Consumed by research/run_optimizer.optimize_for_mode.
+# V4_Legacy is deliberately ABSENT: it is not researched per-mode — its windows
+# come from the legacy flat profile fields. Including it here would make the
+# research cycle write best_windows['V4_Legacy'], which would then shadow those
+# flat fields and break the V4.0 anchor.
+MODE_GRIDS = {
+    "Aggressive": ([5, 8, 10, 12], [20, 25, 30, 40]),
+    "Swing":      ([15, 20, 25],   [40, 50, 60]),
+    "Long_Term":  ([40, 50, 60],   [150, 200, 250]),
+    "Volatile":   ([10, 15, 20],   [35, 40, 50]),
+}
+
+
 TRADING_MODES = {
+    # Exact deployed V4.0 behavior; the rollback anchor. Its ma_short/ma_long here
+    # are placeholders — the resolver overrides them with each ticker's legacy flat
+    # windows (this is the DEFAULT mode, so the flat-field bridge applies).
+    "V4_Legacy": ModeSettings(
+        name="V4_Legacy",
+        ma_short=20, ma_long=50, rsi_window=14, rsi_buy_threshold=55,
+        allow_multi_entry=False, reentry_cooldown_days=0,
+        exit_on_trend_reversal=True, trailing_stop_percent=15.0,
+        sell_on_overbought=False, rsi_sell_threshold=70,
+        sentiment_enabled=True, conviction_min=0.5, conviction_max=1.5,
+        cash_reserve_pct=0.15, allow_fractional=True,
+        signal_stop_loss_pct=-0.15,
+    ),
     "Aggressive": ModeSettings(
         name="Aggressive",
         ma_short=10, ma_long=30, rsi_window=10, rsi_buy_threshold=55,
@@ -52,7 +85,7 @@ TRADING_MODES = {
         # Aggressive:  after rsi_sell_threshold=80,
         signal_stop_loss_pct=None,
     ),
-    "Swing": ModeSettings(          # == deployed V4.0 (ship-dark anchor; production target is Auto)
+    "Swing": ModeSettings(          # a real swing preset with its own grid — NOT V4.0
         name="Swing",
         ma_short=20, ma_long=50, rsi_window=14, rsi_buy_threshold=55,
         allow_multi_entry=False, reentry_cooldown_days=0,
@@ -91,9 +124,10 @@ TRADING_MODES = {
 class ModeResolver:
     """Resolves the active ModeSettings for a ticker.
 
-    active_mode is a mode name ("Aggressive"/"Swing"/"Long_Term"/"Volatile") or
-    "Auto" (use each ticker's researched best_mode). Unknown names fall back to
-    the default (Swing), matching the old strategy_config.get_profile behavior.
+    active_mode is a mode name ("V4_Legacy"/"Aggressive"/"Swing"/"Long_Term"/
+    "Volatile") or "Auto" (use each ticker's researched best_mode). Unknown names
+    fall back to the default (V4_Legacy), so an unrecognized setting degrades to
+    exact deployed V4.0 behavior rather than to an unvalidated preset.
     """
 
     def __init__(self, active_mode, modes=None, default=DEFAULT_MODE):
@@ -120,8 +154,8 @@ class ModeResolver:
         return settings
 
     def _resolve_rsi_window(self, settings, name, profile):
-        """TRANSITIONAL bridge, same rule as the window bridge: V4.0 read a flat
-        `rsi_period` off the profile, so it belongs to the DEFAULT (Swing) mode."""
+        """Same rule as the window bridge: V4.0 read a flat `rsi_period` off the
+        profile, so it belongs to the DEFAULT (V4_Legacy) mode."""
         profile = profile or {}
         if name == self.default:
             rsi = profile.get("rsi_period")
@@ -139,11 +173,11 @@ class ModeResolver:
     def _resolve_windows(self, settings, name, profile):
         """MA-window precedence:
         1. Phase-4 per-mode researched windows: profile['best_windows'][name].
-        2. TRANSITIONAL backward-compat bridge: the legacy flat optimized windows
-           (mode-agnostic, free-searched in V4.0) are treated as the DEFAULT
-           (Swing) mode's windows, so Swing == V4.0 with today's profile schema.
-           Retire this branch once Phase 4 migrates those windows into
-           best_windows['Swing'].
+        2. The legacy flat optimized windows (mode-agnostic, free-searched in V4.0)
+           belong to the DEFAULT (V4_Legacy) mode, so V4_Legacy == V4.0 exactly.
+           This is a permanent branch, not transitional: V4_Legacy is defined as
+           "whatever the legacy free search chose", and it is excluded from
+           MODE_GRIDS so nothing ever writes best_windows['V4_Legacy'] to shadow it.
         3. Otherwise the mode's own default windows."""
         profile = profile or {}
         per_mode = (profile.get("best_windows") or {}).get(name)

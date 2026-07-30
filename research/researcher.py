@@ -2,62 +2,130 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-# Adjust path so we can import from the utils folder
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from utils.profile_manager import load_profiles, save_profiles, is_stale
+from engine.modes import DEFAULT_MODE
+from research.run_optimizer import run_optimization, select_best_mode
 
-# --- IMPORT ACTUAL V2 OPTIMIZER ---
-from research.run_optimizer import run_optimization 
 
 def update_profile(ticker, best_short, best_long, rsi_period=14):
-    """Saves the newly discovered optimized parameters to the JSON file."""
+    """Saves newly discovered optimized parameters. MERGES into the existing
+    profile so V5 fields (best_mode / best_windows) survive a legacy re-run."""
     profiles = load_profiles()
-    
-    # Create or update the ticker's profile with today's date
-    profiles[ticker] = {
+    profile = dict(profiles.get(ticker, {}))
+    profile.update({
         "last_optimized": datetime.now().strftime("%Y-%m-%d"),
         "strategy": "Combo",
         "best_short_window": best_short,
         "best_long_window": best_long,
-        "rsi_period": rsi_period
-    }
-    
+        "rsi_period": rsi_period,
+    })
+    profiles[ticker] = profile
     save_profiles(profiles)
-    print(f"\n✅ Successfully updated Memory Bank for {ticker} with {best_short}/{best_long} MA.")
+    print(f"\n✅ Updated Memory Bank for {ticker} with {best_short}/{best_long} MA.")
 
-def run_research_cycle(tickers):
-    """Scans the watchlist and re-optimizes stale stocks."""
-    print("\n🔍 Starting Autonomous Research Cycle...")
-    
-    # Dynamically calculate a 3-year lookback window for the backtest
+
+def update_mode_research(ticker, best_mode, records):
+    """Store per-mode research: the winning mode plus each mode's best windows.
+    Additive — legacy fields stay intact so Swing resolves exactly as today."""
+    profiles = load_profiles()
+    profile = dict(profiles.get(ticker, {}))
+    best_windows = dict(profile.get("best_windows", {}))
+    mode_scores = {}
+    for name, r in records.items():
+        best_windows[name] = {"short": r["short"], "long": r["long"]}
+        mode_scores[name] = {"score": round(r["score"], 4),
+                             "return_pct": round(r["return_pct"], 2),
+                             "max_dd_pct": round(r["max_dd_pct"], 2)}
+    profile.update({
+        "last_optimized": datetime.now().strftime("%Y-%m-%d"),
+        "strategy": "Combo",
+        "best_mode": best_mode,
+        "best_windows": best_windows,
+        "mode_scores": mode_scores,
+    })
+    profiles[ticker] = profile
+    save_profiles(profiles)
+    print(f"\n✅ {ticker}: best_mode={best_mode} "
+          f"({best_windows[best_mode]['short']}/{best_windows[best_mode]['long']})")
+
+
+def migrate_flat_windows_to_default_mode():
+    """One-time schema migration: the legacy flat best_short/long_window fields
+    were mode-agnostic; treat them as the DEFAULT (Swing) mode's windows so the
+    transitional bridge in ModeResolver can eventually be retired. Idempotent,
+    and the legacy fields are KEPT so nothing breaks mid-migration."""
+    profiles = load_profiles()
+    migrated = 0
+    for ticker, profile in profiles.items():
+        short = profile.get("best_short_window")
+        long = profile.get("best_long_window")
+        if short is None or long is None:
+            continue
+        best_windows = dict(profile.get("best_windows", {}))
+        if DEFAULT_MODE in best_windows:
+            continue
+        best_windows[DEFAULT_MODE] = {"short": short, "long": long}
+        profile["best_windows"] = best_windows
+        migrated += 1
+    if migrated:
+        save_profiles(profiles)
+    print(f"🔀 Migrated {migrated} profile(s) into best_windows['{DEFAULT_MODE}'].")
+    return migrated
+
+
+def run_research_cycle(tickers, per_mode=False, force=False):
+    """Scans the watchlist and re-optimizes stale stocks.
+    per_mode=False -> legacy mode-agnostic grid search (unchanged V4 behavior).
+    per_mode=True  -> search every mode's own window family and record the winner.
+    force=True     -> ignore freshness and re-research every ticker."""
+    print("\n🔍 Starting Autonomous Research Cycle"
+          f"{' (per-mode)' if per_mode else ''}{' [FORCED]' if force else ''}...")
+
     end_date = datetime.now().strftime("%Y-%m-%d")
     start_date = (datetime.now() - timedelta(days=365 * 3)).strftime("%Y-%m-%d")
-    
+
     for ticker in tickers:
-        if is_stale(ticker):
-            print(f"\n⚠️ {ticker} is stale or missing. Running Optimizer...")
-            
-            # --- THE REAL GRID SEARCH OPTIMIZER ---
-            best_short, best_long = run_optimization(ticker, start_date, end_date, strategy="Combo")
-            
+        if not force and not is_stale(ticker):
+            print(f"\n✨ {ticker} is fresh. No optimization needed.")
+            continue
+
+        print(f"\n⚠️ {ticker} is stale or missing. Running Optimizer...")
+        if per_mode:
+            best_mode, records = select_best_mode(ticker, start_date, end_date)
+            if best_mode:
+                update_mode_research(ticker, best_mode, records)
+            else:
+                print(f"\n❌ Per-mode optimization failed for {ticker}. Skipping update.")
+        else:
+            best_short, best_long = run_optimization(ticker, start_date, end_date,
+                                                     strategy="Combo")
             if best_short is not None and best_long is not None:
-                # Save the real winning parameters back to the JSON file!
                 update_profile(ticker, best_short, best_long)
             else:
                 print(f"\n❌ Optimization failed for {ticker}. Skipping update.")
-                
-        else:
-            print(f"\n✨ {ticker} is fresh. No optimization needed.")
+
     print("\n🔍 Research Cycle Completed.")
     return "Research cycle completed."
 
+
 if __name__ == "__main__":
-    # The same watchlist the Live Controller uses
-   # Updated list in engine/researcher.py
+    import argparse
     master_watchlist = [
-    "NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "META",
-    "GOOGL", "NFLX", "AMD", "SMCI", "GLD", "PLTR", # Originals
-    "ORCL", "CRWV", "JPM", "WMT", "LLY", "AVGO",
-    "MU", "V", "COST", "CRWD", "AIQ", "QQQ" # The Expansion Pack
+        "NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "META",
+        "GOOGL", "NFLX", "AMD", "SMCI", "GLD", "PLTR",
+        "ORCL", "CRWV", "JPM", "WMT", "LLY", "AVGO",
+        "MU", "V", "COST", "CRWD", "AIQ", "QQQ"
     ]
-    run_research_cycle(master_watchlist)
+    parser = argparse.ArgumentParser(description="Autonomous research cycle")
+    parser.add_argument("--modes", action="store_true", help="Per-mode research")
+    parser.add_argument("--migrate", action="store_true",
+                        help="Only migrate legacy windows into best_windows[Swing]")
+    parser.add_argument("--force", action="store_true",
+                        help="Re-research every ticker, ignoring freshness")
+    args = parser.parse_args()
+
+    if args.migrate:
+        migrate_flat_windows_to_default_mode()
+    else:
+        run_research_cycle(master_watchlist, per_mode=args.modes, force=args.force)

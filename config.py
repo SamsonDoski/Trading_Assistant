@@ -60,7 +60,8 @@ MIN_FRACTIONAL_NOTIONAL_USD = 1.00
 # -----------------
 # Active Trading Mode (V5.0)
 # -----------------
-# "Aggressive" | "Swing" | "Long_Term" | "Volatile" | "Auto"
+# "V4_Legacy" | "Aggressive" | "Swing" | "Long_Term" | "Volatile" | "Auto"
 # Read from the environment so the Lambda can switch modes WITHOUT a redeploy.
-# "Swing" == deployed V4.0 behavior — the safe rollback value.
-ACTIVE_MODE = os.getenv("ACTIVE_MODE", "Swing")
+# "V4_Legacy" == deployed V4.0 behavior (legacy free-searched per-ticker windows)
+# — the safe rollback value. NOTE "Swing" is a preset with its own grid, NOT V4.0.
+ACTIVE_MODE = os.getenv("ACTIVE_MODE", "V4_Legacy")

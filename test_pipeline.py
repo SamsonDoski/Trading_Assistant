@@ -244,7 +244,8 @@ class TestScanner:
     def _settings(**over):
         from engine.modes import TRADING_MODES
         from dataclasses import replace
-        return replace(TRADING_MODES["Swing"], ma_short=5, ma_long=20, rsi_window=14, **over)
+        return replace(TRADING_MODES["V4_Legacy"], ma_short=5, ma_long=20,
+                       rsi_window=14, **over)
 
     def test_get_signals_contract(self, monkeypatch):
         import engine.scanner as sm
@@ -523,7 +524,7 @@ class TestExecutioner:
 # ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
 class TestControllerOrchestration:
     def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0,
-              sentiment_report=None, sentiment_mode="shadow", mode="Swing"):
+              sentiment_report=None, sentiment_mode="shadow", mode="V4_Legacy"):
         import live_controller as lc
         class FakeScanner:
             def get_signals(self, *a, **k):
@@ -1019,7 +1020,7 @@ class TestSentiment:
 class TestTradingModes:
     def test_all_modes_well_formed(self):
         from engine.modes import TRADING_MODES
-        for name in ("Aggressive", "Swing", "Long_Term", "Volatile"):
+        for name in ("V4_Legacy", "Aggressive", "Swing", "Long_Term", "Volatile"):
             m = TRADING_MODES[name]
             assert m.name == name
             assert m.ma_short < m.ma_long
@@ -1027,16 +1028,24 @@ class TestTradingModes:
             assert m.conviction_min <= m.conviction_max
             assert 0 <= m.cash_reserve_pct < 1
 
-    def test_swing_matches_v4_behavior(self):
-        # Backward-compat guard: Swing must equal the deployed V4.0 constants.
-        from engine.modes import TRADING_MODES
+    def test_v4_legacy_matches_v4_behavior(self):
+        # Backward-compat guard: V4_Legacy must equal the deployed V4.0 constants.
+        from engine.modes import TRADING_MODES, DEFAULT_MODE
         import config
-        s = TRADING_MODES["Swing"]
+        assert DEFAULT_MODE == "V4_Legacy"        # the rollback anchor
+        s = TRADING_MODES["V4_Legacy"]
         assert s.trailing_stop_percent == config.TRAILING_STOP_PERCENT
         assert s.cash_reserve_pct == config.CASH_RESERVE_PCT
         assert s.sentiment_enabled is True        # SENTIMENT_MODE == "live"
         assert s.rsi_buy_threshold == 55          # current hardcoded combo threshold
         assert s.allow_multi_entry is False       # current single-entry
+        assert s.signal_stop_loss_pct == -0.15    # V4.0 kept the combo hard stop
+
+    def test_v4_legacy_is_not_researched_per_mode(self):
+        # V4_Legacy must stay OUT of the grids, or the research cycle would write
+        # best_windows['V4_Legacy'] and shadow the legacy flat windows.
+        from engine.modes import MODE_GRIDS
+        assert "V4_Legacy" not in MODE_GRIDS
 
     def test_long_term_holds_with_no_stop(self):
         from engine.modes import TRADING_MODES
@@ -1057,26 +1066,35 @@ class TestModeResolver:
         from engine.modes import ModeResolver
         assert ModeResolver("Aggressive").settings_for().name == "Aggressive"
 
-    def test_unknown_mode_defaults_to_swing(self):
+    def test_unknown_mode_defaults_to_v4_legacy(self):
         from engine.modes import ModeResolver
-        assert ModeResolver("does-not-exist").settings_for().name == "Swing"
+        assert ModeResolver("does-not-exist").settings_for().name == "V4_Legacy"
 
     def test_auto_uses_profile_best_mode(self):
         from engine.modes import ModeResolver
         s = ModeResolver("Auto").settings_for(profile={"best_mode": "Volatile"})
         assert s.name == "Volatile"
 
-    def test_auto_falls_back_to_swing(self):
+    def test_auto_falls_back_to_v4_legacy(self):
         from engine.modes import ModeResolver
-        assert ModeResolver("Auto").settings_for(profile={}).name == "Swing"
-        assert ModeResolver("Auto").settings_for(profile=None).name == "Swing"
+        assert ModeResolver("Auto").settings_for(profile={}).name == "V4_Legacy"
+        assert ModeResolver("Auto").settings_for(profile=None).name == "V4_Legacy"
 
-    def test_swing_inherits_legacy_per_ticker_windows(self):
-        # Backward compat: Swing (default) uses the ticker's V4.0-optimized windows.
+    def test_v4_legacy_inherits_legacy_per_ticker_windows(self):
+        # Backward compat: V4_Legacy (default) uses the ticker's V4.0-optimized windows.
         from engine.modes import ModeResolver
-        s = ModeResolver("Swing").settings_for(
+        s = ModeResolver("V4_Legacy").settings_for(
             profile={"best_short_window": 7, "best_long_window": 33})
         assert s.ma_short == 7 and s.ma_long == 33
+
+    def test_swing_ignores_legacy_flat_windows(self):
+        # Swing is a preset now, NOT the V4 anchor — it must not inherit the flat
+        # free-searched windows.
+        from engine.modes import ModeResolver, TRADING_MODES
+        s = ModeResolver("Swing").settings_for(
+            profile={"best_short_window": 7, "best_long_window": 33})
+        assert s.ma_short == TRADING_MODES["Swing"].ma_short       # 20, not 7
+        assert s.ma_long == TRADING_MODES["Swing"].ma_long         # 50, not 33
 
     def test_non_default_mode_ignores_legacy_flat_windows(self):
         from engine.modes import ModeResolver, TRADING_MODES
@@ -1160,12 +1178,12 @@ class TestComboModeThresholds:
 
 # ================================================================ NEW: V5.0 mode-driven controller behavior
 class TestControllerModes(TestControllerOrchestration):
-    def test_swing_is_the_v4_baseline(self, monkeypatch):
+    def test_v4_legacy_is_the_baseline(self, monkeypatch):
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
-            "current_price": 200.0, "current_rsi": 40.0}, held=False, mode="Swing")
+            "current_price": 200.0, "current_rsi": 40.0}, held=False, mode="V4_Legacy")
         lc.run_live_pipeline()
         assert h["exec"].buys == [("AAPL", 42)]     # fresh-crossover buy, baseline size
-        # (Swing's stop attachment is covered by test_protection_pass_attaches_trailing_stop)        # Swing trailing stop
+        # (stop attachment is covered by test_protection_pass_attaches_trailing_stop)
 
     def test_long_term_attaches_no_stop(self, monkeypatch):
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
@@ -1185,11 +1203,11 @@ class TestControllerModes(TestControllerOrchestration):
 
     def test_hold_through_when_exit_flag_off(self, monkeypatch):
         lc, h = self._wire(monkeypatch, {"latest_signal": 0, "previous_signal": 1,
-            "current_price": 180.0, "current_rsi": 60.0}, held=True, mode="Swing")
+            "current_price": 180.0, "current_rsi": 60.0}, held=True, mode="V4_Legacy")
         import engine.modes as mm
         from dataclasses import replace
-        holder = replace(mm.TRADING_MODES["Swing"], exit_on_trend_reversal=False)
-        monkeypatch.setitem(mm.TRADING_MODES, "Swing", holder)
+        holder = replace(mm.TRADING_MODES["V4_Legacy"], exit_on_trend_reversal=False)
+        monkeypatch.setitem(mm.TRADING_MODES, "V4_Legacy", holder)
         lc.run_live_pipeline()
         assert h["exec"].sells == []                         # reversal ignored
 
@@ -1238,15 +1256,127 @@ class TestControllerModes(TestControllerOrchestration):
         lc.run_live_pipeline()
         assert h_exec["ex"].buys == []          # never authorize on unverifiable cooldown
 
-    def test_swing_single_entry_unchanged(self, monkeypatch):
-        # Same setup as the recovery test, but Swing must NOT re-enter.
+    def test_v4_legacy_single_entry_unchanged(self, monkeypatch):
+        # Same setup as the recovery test, but V4_Legacy must NOT re-enter.
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
             "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
-            held=False, mode="Swing")
+            held=False, mode="V4_Legacy")
         lc.run_live_pipeline()
         assert h["exec"].buys == []
 
-    
+# ================================================================ NEW: V5.0 per-mode research
+class TestPerModeOptimizer:
+    @staticmethod
+    def _fake_df(n=900):
+        idx = pd.date_range("2021-01-01", periods=n, freq="D")
+        t = np.arange(n)
+        return pd.DataFrame({"Close": 100 + 0.15 * t + 12 * np.sin(t / 20.0)}, index=idx)
+
+    def test_mode_grids_cover_researched_modes(self):
+        # Every mode EXCEPT V4_Legacy is researched per-mode; V4_Legacy's windows
+        # come from the legacy flat profile fields instead.
+        from engine.modes import TRADING_MODES, MODE_GRIDS
+        assert set(MODE_GRIDS) == set(TRADING_MODES) - {"V4_Legacy"}
+        for shorts, longs in MODE_GRIDS.values():
+            assert min(shorts) < max(longs)
+
+    def test_optimize_for_mode_stays_in_its_window_family(self, monkeypatch):
+        import research.run_optimizer as opt
+        from engine.modes import MODE_GRIDS
+        monkeypatch.setattr(opt, "fetch_data", lambda *a, **k: self._fake_df())
+        rec = opt.optimize_for_mode("X", "Long_Term", "2022-01-01", "2023-06-01",
+                                    verbose=False)
+        shorts, longs = MODE_GRIDS["Long_Term"]
+        assert rec["short"] in shorts and rec["long"] in longs
+
+    def test_unknown_mode_returns_none(self, monkeypatch):
+        import research.run_optimizer as opt
+        monkeypatch.setattr(opt, "fetch_data", lambda *a, **k: self._fake_df())
+        assert opt.optimize_for_mode("X", "NotAMode", "2022-01-01", "2023-01-01") is None
+
+    def test_select_best_mode_picks_top_score(self, monkeypatch):
+        import research.run_optimizer as opt
+        from engine.modes import MODE_GRIDS
+        monkeypatch.setattr(opt, "fetch_data", lambda *a, **k: self._fake_df())
+        best, records = opt.select_best_mode("X", "2022-01-01", "2023-06-01",
+                                             verbose=False)
+        assert best in MODE_GRIDS
+        assert records[best]["score"] == max(r["score"] for r in records.values())
+
+
+class TestProfileSchemaV5:
+    def test_update_profile_preserves_v5_fields(self, monkeypatch, tmp_path):
+        import utils.profile_manager as pm
+        import research.researcher as rsr
+        monkeypatch.setattr(pm, "PROFILE_FILE", str(tmp_path / "p.json"))
+        pm.save_profiles({"AAPL": {"best_mode": "Volatile",
+                                   "best_windows": {"Volatile": {"short": 15, "long": 40}}}})
+        rsr.update_profile("AAPL", 20, 50)
+        saved = pm.load_profiles()["AAPL"]
+        assert saved["best_short_window"] == 20        # legacy fields updated
+        assert saved["best_mode"] == "Volatile"        # V5 fields survived the merge
+        assert saved["best_windows"]["Volatile"]["short"] == 15
+
+    def test_update_mode_research_writes_schema(self, monkeypatch, tmp_path):
+        import utils.profile_manager as pm
+        import research.researcher as rsr
+        monkeypatch.setattr(pm, "PROFILE_FILE", str(tmp_path / "p.json"))
+        records = {
+            "Swing": {"short": 20, "long": 50, "score": 1.0,
+                      "return_pct": 10.0, "max_dd_pct": -10.0},
+            "Volatile": {"short": 15, "long": 40, "score": 2.5,
+                         "return_pct": 25.0, "max_dd_pct": -10.0},
+        }
+        rsr.update_mode_research("NVDA", "Volatile", records)
+        saved = pm.load_profiles()["NVDA"]
+        assert saved["best_mode"] == "Volatile"
+        assert saved["best_windows"]["Volatile"] == {"short": 15, "long": 40}
+        assert saved["best_windows"]["Swing"] == {"short": 20, "long": 50}
+        assert saved["mode_scores"]["Volatile"]["score"] == 2.5
+
+    def test_migration_is_idempotent(self, monkeypatch, tmp_path):
+        import utils.profile_manager as pm
+        import research.researcher as rsr
+        monkeypatch.setattr(pm, "PROFILE_FILE", str(tmp_path / "p.json"))
+        pm.save_profiles({"AAPL": {"best_short_window": 40, "best_long_window": 100}})
+        assert rsr.migrate_flat_windows_to_default_mode() == 1
+        assert pm.load_profiles()["AAPL"]["best_windows"]["Swing"] == {"short": 40, "long": 100}
+        assert rsr.migrate_flat_windows_to_default_mode() == 0     # no double-migration
+        assert pm.load_profiles()["AAPL"]["best_short_window"] == 40   # legacy kept
+
+    def test_resolver_reads_migrated_schema(self, monkeypatch, tmp_path):
+        # End-to-end: research output feeds the Phase-1 resolver.
+        from engine.modes import ModeResolver
+        profile = {"best_mode": "Volatile",
+                   "best_windows": {"Volatile": {"short": 15, "long": 40}}}
+        s = ModeResolver("Auto").settings_for(profile)
+        assert s.name == "Volatile" and s.ma_short == 15 and s.ma_long == 40
+
+
+class TestResearchCycleModes:
+    def test_per_mode_cycle_records_winner(self, monkeypatch):
+        import research.researcher as rsr
+        got = {}
+        monkeypatch.setattr(rsr, "is_stale", lambda t: True)
+        monkeypatch.setattr(rsr, "select_best_mode",
+                            lambda t, s, e: ("Volatile", {"Volatile": {
+                                "short": 15, "long": 40, "score": 2.0,
+                                "return_pct": 20.0, "max_dd_pct": -10.0}}))
+        monkeypatch.setattr(rsr, "update_mode_research",
+                            lambda t, m, r: got.__setitem__(t, m))
+        rsr.run_research_cycle(["NVDA"], per_mode=True)
+        assert got == {"NVDA": "Volatile"}
+
+    def test_legacy_cycle_still_default(self, monkeypatch):
+        import research.researcher as rsr
+        got = []
+        monkeypatch.setattr(rsr, "is_stale", lambda t: True)
+        monkeypatch.setattr(rsr, "run_optimization", lambda *a, **k: (10, 40))
+        monkeypatch.setattr(rsr, "update_profile", lambda t, s, l: got.append((t, s, l)))
+        rsr.run_research_cycle(["AAPL"])            # per_mode defaults False
+        assert got == [("AAPL", 10, 40)]
+
+
 
 # ================================================================ documented exclusions
 @pytest.mark.skip(reason="Manual live-account scripts: they touch Alpaca at import "

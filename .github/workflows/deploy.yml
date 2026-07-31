@@ -2,7 +2,7 @@ name: Deploy to Lambda
 
 on:
   push:
-    branches: [ "mainV4.0" ]      # deploy only when the production branch updates
+    branches: [ "mainV5.0" ]      # deploy only when the production branch updates
   workflow_dispatch:               # ...or trigger manually from the Actions tab
 
 jobs:

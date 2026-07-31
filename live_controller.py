@@ -9,7 +9,8 @@ from engine.scanner import StrategyScanner
 from engine.allocator import PortfolioAllocator
 from engine.executioner import AlpacaExecutioner
 from engine.modes import ModeResolver
-from config import (SENTIMENT_MODE, MIN_FRACTIONAL_NOTIONAL_USD, ACTIVE_MODE)
+from config import (SENTIMENT_MODE, MIN_FRACTIONAL_NOTIONAL_USD, ACTIVE_MODE,
+                    ALPACA_PAPER)
 from engine.sentiment import SentimentAnalyzer
 
 
@@ -19,10 +20,16 @@ def run_live_pipeline():
     isolated micro-modules. It decides actions; the modules do the work.
 
     V5.0: every strategy/risk parameter arrives as a resolved ModeSettings from
-    the ModeResolver, per ticker. ACTIVE_MODE="Swing" reproduces V4.0 exactly.
+    the ModeResolver, per ticker. ACTIVE_MODE="V4_Legacy" reproduces V4.0 exactly.
+
+    The brokerage account is chosen entirely by environment: ALPACA_API_KEY /
+    ALPACA_SECRET_KEY pick the account, ALPACA_PAPER picks the endpoint. Running a
+    second account in parallel therefore needs no code — just another deployment
+    with a different environment.
     """
     load_dotenv()
-    print(f"⚙️ Initializing V5.0 Controller | mode: {ACTIVE_MODE}")
+    account_kind = "PAPER" if ALPACA_PAPER else "LIVE"
+    print(f"⚙️ Initializing V5.0 Controller | mode: {ACTIVE_MODE} | account: {account_kind}")
 
     # 1. Wire up the micro-modules
     notifier = DiscordNotifier()
@@ -39,7 +46,7 @@ def run_live_pipeline():
     api_key = os.getenv("ALPACA_API_KEY")
     secret_key = os.getenv("ALPACA_SECRET_KEY")
     try:
-        executioner = AlpacaExecutioner(api_key, secret_key, paper=True)
+        executioner = AlpacaExecutioner(api_key, secret_key, paper=ALPACA_PAPER)
     except Exception as e:
         msg = f"🚨 ABORT: cannot read positions from Alpaca ({e}). No trades this run."
         print(msg)
@@ -54,7 +61,8 @@ def run_live_pipeline():
 
     greeting = "Good Morning" if datetime.now(timezone.utc).hour < 16 else "Good Evening"
     notifier.send_message(
-        f"{greeting}, Olajide. Running Trading Assistant Engine | mode: **{ACTIVE_MODE}**"
+        f"{greeting}, Olajide. Running Trading Assistant Engine | "
+        f"mode: **{ACTIVE_MODE}** | account: **{account_kind}**"
     )
 
     # Session budget: deployable buying power after the cash reserve, split

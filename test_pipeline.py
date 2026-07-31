@@ -156,6 +156,18 @@ class TestConfig:
         assert config.SHORT_MA < config.LONG_MA
         assert config.RESULTS_DIR
 
+    def test_alpaca_paper_defaults_true_and_needs_explicit_optout(self, monkeypatch):
+        # Going live must require an explicit "false" — never a missing/garbled var.
+        import importlib
+        import config as cfg
+        for value, expected in (("false", False), ("FALSE", False), ("0", False),
+                                ("no", False), ("true", True), ("", True),
+                                ("anything-else", True)):
+            monkeypatch.setenv("ALPACA_PAPER", value)
+            assert importlib.reload(cfg).ALPACA_PAPER is expected, value
+        monkeypatch.delenv("ALPACA_PAPER", raising=False)
+        assert importlib.reload(cfg).ALPACA_PAPER is True      # unset -> paper
+
 
 # ================================================================ NEW: allocator (V4.1 equal-weight + fractional)
 class TestAllocator:
@@ -587,7 +599,9 @@ class TestControllerOrchestration:
         monkeypatch.setattr(lc.time, "sleep", lambda *a, **k: None)
         monkeypatch.setattr(lc, "ACTIVE_MODE", mode)
         def make_exec(*a, **k):
-            holder["exec"] = FakeExec(); return holder["exec"]
+            holder["exec"] = FakeExec()
+            holder["exec_kwargs"] = k          # so tests can assert the paper flag
+            return holder["exec"]
         monkeypatch.setattr(lc, "AlpacaExecutioner", make_exec)
         return lc, holder
 
@@ -596,6 +610,19 @@ class TestControllerOrchestration:
             "current_price": 200.0, "current_rsi": 40.0}, held=False)
         lc.run_live_pipeline()
         assert h["exec"].buys == [("AAPL", 42)] and h["exec"].sells == []
+
+    def test_alpaca_paper_flag_reaches_the_executioner(self, monkeypatch):
+        signals = {"latest_signal": 1, "previous_signal": 1,
+                   "current_price": 200.0, "current_rsi": 50.0}
+        lc, h = self._wire(monkeypatch, signals, held=True)
+        monkeypatch.setattr(lc, "ALPACA_PAPER", False)
+        lc.run_live_pipeline()
+        assert h["exec_kwargs"]["paper"] is False      # live endpoint requested
+
+        lc, h = self._wire(monkeypatch, signals, held=True)
+        monkeypatch.setattr(lc, "ALPACA_PAPER", True)
+        lc.run_live_pipeline()
+        assert h["exec_kwargs"]["paper"] is True
 
     def test_sell_when_trend_dies(self, monkeypatch):
         lc, h = self._wire(monkeypatch, {"latest_signal": 0, "previous_signal": 1,

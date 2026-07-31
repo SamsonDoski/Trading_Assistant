@@ -38,8 +38,19 @@ jobs:
           aws-region: us-east-1
 
       - name: Deploy to Lambda
+        # One build, pushed to every deployment. Each function runs the SAME code
+        # and differs only by its environment variables (Alpaca keys, ALPACA_PAPER,
+        # ACTIVE_MODE, Discord webhook), so accounts stay isolated: separate
+        # schedules, separate failures, separate notifications.
+        # Add a function name here only AFTER creating it in AWS — a missing
+        # function fails this step and blocks the whole deploy.
+        env:
+          FUNCTIONS: "trading-assistant-live trading-assistant-live-secondary"
         run: |
-          aws lambda update-function-code \
-            --function-name trading-assistant-live \
-            --zip-file fileb://function.zip \
-            --region us-east-1
+          for function_name in $FUNCTIONS; do
+            echo "Deploying to $function_name..."
+            aws lambda update-function-code \
+              --function-name "$function_name" \
+              --zip-file fileb://function.zip \
+              --region us-east-1
+          done

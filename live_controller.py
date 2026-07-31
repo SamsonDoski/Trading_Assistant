@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 
 from utils.profile_manager import load_profiles, is_stale
 from utils.notifier import DiscordNotifier
+from utils.alpaca_data import fetch_latest_price
 from engine.scanner import StrategyScanner
 from engine.allocator import PortfolioAllocator
 from engine.executioner import AlpacaExecutioner
@@ -122,17 +123,22 @@ def run_live_pipeline():
 
             # Multi-entry re-entry (Aggressive/Volatile): the trend never broke but
             # we're flat (e.g. stopped out). Require an RSI dip that is TURNING UP
-            # — buy the bounce, never the descent — plus a cooldown.
+            # — buy the bounce, never the descent. Re-entry only ever happens while
+            # FLAT; this never adds to an open position.
             recovery_entry = False
+            recovery_note = ""      # why re-entry did NOT fire, for the log
             if (settings.allow_multi_entry and not holding
                     and latest_signal == 1 and not fresh_entry):
                 dipped = rsi < settings.rsi_buy_threshold
                 turning_up = previous_rsi is not None and rsi > previous_rsi
-                if dipped and turning_up:
-                    days = executioner.days_since_last_buy(ticker)
-                    # None = history unreadable -> refuse the extra entry.
-                    recovery_entry = (days is not None
-                                      and days >= settings.reentry_cooldown_days)
+                if not dipped:
+                    recovery_note = (f"waiting for RSI to dip below "
+                                     f"{settings.rsi_buy_threshold:.0f} to re-enter")
+                elif not turning_up:
+                    recovery_note = (f"RSI is below {settings.rsi_buy_threshold:.0f} "
+                                     f"but still falling; waiting for it to turn up")
+                else:
+                    recovery_entry = True
 
             if fresh_entry or recovery_entry:
                 entry_kind = "fresh crossover" if fresh_entry else "RSI-recovery re-entry"
@@ -161,28 +167,39 @@ def run_live_pipeline():
                 if vetoed:
                     state_msg = f"⛔ BUY VETOED by sentiment — {report.rationale}"
                 else:
+                    # Size against a LIVE quote, not the last completed daily bar.
+                    # The signal is deliberately a closed-bar decision, but the
+                    # money is spent at today's price — using the stale close made
+                    # every buy off by whatever the price had moved since.
+                    sizing_price = fetch_latest_price(ticker) or price
+                    position_budget_usd = allocator.position_budget(
+                        base_allocation_usd, remaining_budget_usd, conviction_multiplier)
                     shares, is_fractional = allocator.calculate_shares(
-                        current_price=price,
+                        current_price=sizing_price,
                         base_allocation_usd=base_allocation_usd,
                         remaining_budget_usd=remaining_budget_usd,
                         conviction_multiplier=conviction_multiplier,
                         allow_fractional=settings.allow_fractional,
                     )
                     if is_fractional and not executioner.fractionable(ticker):
-                        state_msg = (f"⏸️ BUY signal — one whole share (${price:.2f}) exceeds this "
-                                     f"position's ${base_allocation_usd * conviction_multiplier:,.2f} "
-                                     f"budget and {ticker} isn't fractionable. Skipped.")
+                        state_msg = (f"⏸️ BUY signal — one whole share (${sizing_price:.2f}) exceeds "
+                                     f"this position's ${position_budget_usd:,.2f} budget and "
+                                     f"{ticker} isn't fractionable. Skipped.")
                     elif shares > 0:
-                        executioner.execute_market_buy(ticker, shares)
-                        remaining_budget_usd -= shares * price
                         if is_fractional:
-                            fill_desc = f"{shares:.4f} fractional shares"
+                            # Dollar order: the broker derives the quantity at the
+                            # real fill price, so the spend is exact.
+                            executioner.execute_market_buy(ticker, notional=position_budget_usd)
+                            remaining_budget_usd -= position_budget_usd
+                            fill_desc = f"${position_budget_usd:,.2f} (fractional)"
                             stop_desc = "software-trailing DAY stop"
                         else:
+                            executioner.execute_market_buy(ticker, qty=shares)
+                            remaining_budget_usd -= shares * sizing_price
                             fill_desc = f"{int(shares)} shares"
                             stop_desc = ("trailing stop" if settings.trailing_stop_percent
                                          else "no stop (mode)")
-                        state_msg = (f"🚀 BUY EXECUTED ({entry_kind}): {fill_desc} @ ${price:.2f} "
+                        state_msg = (f"🚀 BUY EXECUTED ({entry_kind}): {fill_desc} @ ~${sizing_price:.2f} "
                                      f"[{stop_desc}] (deployable left: ${remaining_budget_usd:,.0f})")
                     else:
                         state_msg = "⏸️ BUY signal — skipped, insufficient deployable budget."
@@ -202,11 +219,17 @@ def run_live_pipeline():
                 state_msg = f"⏳ Holding (P/L: {pl:+.2f}%)"
 
             elif latest_signal == 1 and previous_signal == 1 and not holding:
-                # The signal is continuously 1 — it was armed on an earlier dip and
-                # ffills until the trend reverses, so an RSI reset alone can NOT
-                # re-arm it. Only a trend reset (or a multi-entry mode) re-enters.
-                state_msg = ("⏳ Trend positive, entry dip already passed. "
-                             "Waiting for a trend reset to re-arm.")
+                # The signal is continuously 1 — armed on an earlier dip and
+                # ffilled until the trend reverses.
+                if settings.allow_multi_entry:
+                    # This mode CAN re-enter without a trend reset; say what it's
+                    # actually waiting on rather than the single-entry boilerplate.
+                    state_msg = f"⏳ Trend positive — {recovery_note}."
+                else:
+                    # An RSI reset alone can NOT re-arm a single-entry mode; only
+                    # a trend reversal followed by a fresh crossover will.
+                    state_msg = ("⏳ Trend positive, entry dip already passed. "
+                                 "Single-entry mode — waiting for a trend reset to re-arm.")
 
             else:
                 state_msg = "⏳ Waiting, Trend negative or RSI is high."

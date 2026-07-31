@@ -244,6 +244,16 @@ class TestAllocator:
                                              allow_fractional=True)
         assert is_frac is True and shares == pytest.approx(0.03)
 
+    def test_position_budget_applies_multiplier_then_cap(self):
+        from engine.allocator import PortfolioAllocator
+        a = PortfolioAllocator()
+        assert a.position_budget(5000, conviction_multiplier=1.5) == pytest.approx(7500)
+        # cap applied AFTER the multiplier
+        assert a.position_budget(5000, 3000, 1.5) == pytest.approx(3000)
+        assert a.position_budget(0) == 0.0
+        assert a.position_budget(None) == 0.0
+        assert a.position_budget(5000, 0, 1.5) == 0.0
+
     def test_legacy_generate_buy_orders(self):
         from engine.allocator import PortfolioAllocator
         orders = PortfolioAllocator().generate_buy_orders(
@@ -401,6 +411,24 @@ class TestExecutioner:
         ex.execute_market_buy("MSFT", 0.5)
         assert len(ex.api.submitted) == 1
         assert float(ex.api.submitted[0].qty) == pytest.approx(0.5)
+
+    def test_execute_market_buy_notional(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        ex.execute_market_buy("MSFT", notional=18.8649)
+        [order] = ex.api.submitted
+        assert float(order.notional) == pytest.approx(18.86)   # rounded to cents
+        assert getattr(order, "qty", None) is None             # never both
+
+    def test_execute_market_buy_rejects_ambiguous_sizing(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        ex.execute_market_buy("MSFT")                       # neither
+        ex.execute_market_buy("MSFT", qty=1, notional=100)  # both
+        ex.execute_market_buy("MSFT", notional=0)           # non-positive
+        assert ex.api.submitted == []
 
     def test_held_symbols(self, monkeypatch):
         import engine.executioner as em
@@ -590,7 +618,8 @@ class TestExecutioner:
 # ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
 class TestControllerOrchestration:
     def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0,
-              sentiment_report=None, sentiment_mode="shadow", mode="V4_Legacy"):
+              sentiment_report=None, sentiment_mode="shadow", mode="V4_Legacy",
+              live_price=None):
         import live_controller as lc
         class FakeScanner:
             def get_signals(self, *a, **k):
@@ -603,14 +632,18 @@ class TestControllerOrchestration:
             def usable_budget(self, bp): return bp
             def base_allocation(self, usable_budget_usd, not_held_count):
                 return usable_budget_usd / max(1, not_held_count)
+            def position_budget(self, base_allocation_usd, remaining_budget_usd=None,
+                                conviction_multiplier=1.0):
+                budget = base_allocation_usd * conviction_multiplier
+                if remaining_budget_usd is not None:
+                    budget = min(budget, remaining_budget_usd)
+                return max(budget, 0.0)
             def calculate_shares(self, current_price, base_allocation_usd,
                                  remaining_budget_usd=None, conviction_multiplier=1.0,
                                  allow_fractional=False):
                 if remaining_budget_usd is not None and remaining_budget_usd < current_price:
                     return 0, False
                 return int(42 * conviction_multiplier), False
-            def base_allocation(self, usable_budget_usd, not_held_count):
-                return usable_budget_usd / max(1, not_held_count)
 
         from engine.sentiment import SentimentReport
         class FakeSentiment:
@@ -625,17 +658,23 @@ class TestControllerOrchestration:
         monkeypatch.setattr(lc, "SENTIMENT_MODE", sentiment_mode)
 
         class FakeNotifier:
-            def __init__(self): self.msgs = []
+            def __init__(self):
+                self.msgs = []
+                holder["notifier"] = self      # so tests can assert on the log text
             def send_message(self, m): self.msgs.append(m)
         class FakeExec:
             def __init__(self, *a, **k):
                 self.buys, self.sells, self.stops = [], [], []
+                self.notional_buys = []
             def is_holding(self, t): return held
             def get_unrealized_pl_pct(self, t): return 3.0
             def get_buying_power(self): return buying_power
             def fractionable(self, t): return True
-            def days_since_last_buy(self, t, lookback_days=90): return float("inf")
-            def execute_market_buy(self, t, q): self.buys.append((t, q))
+            def execute_market_buy(self, t, qty=None, notional=None):
+                if notional is not None:
+                    self.notional_buys.append((t, notional))
+                else:
+                    self.buys.append((t, qty))
             def liquidate_position(self, t): self.sells.append(t)
             def refresh_positions(self): pass
             def refresh_open_orders(self): pass
@@ -652,6 +691,8 @@ class TestControllerOrchestration:
         monkeypatch.setattr(lc, "DiscordNotifier", FakeNotifier)
         monkeypatch.setattr(lc.time, "sleep", lambda *a, **k: None)
         monkeypatch.setattr(lc, "ACTIVE_MODE", mode)
+        # None => quote unavailable, controller falls back to the daily-bar price.
+        monkeypatch.setattr(lc, "fetch_latest_price", lambda t: live_price)
         def make_exec(*a, **k):
             holder["exec"] = FakeExec()
             holder["exec_kwargs"] = k          # so tests can assert the paper flag
@@ -664,6 +705,38 @@ class TestControllerOrchestration:
             "current_price": 200.0, "current_rsi": 40.0}, held=False)
         lc.run_live_pipeline()
         assert h["exec"].buys == [("AAPL", 42)] and h["exec"].sells == []
+
+    def test_sizing_uses_the_live_quote_not_the_daily_bar(self, monkeypatch):
+        # Daily bar says $200, market says $250. Sizing must use $250.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False, live_price=250.0)
+        lc.run_live_pipeline()
+        [(ticker, qty)] = h["exec"].buys
+        assert ticker == "AAPL"
+        # FakeAllocator returns int(42 * multiplier) regardless, so assert the
+        # price the controller reported — that is what it sized and logged on.
+        assert "250.00" in " ".join(h["notifier"].msgs)
+
+    def test_sizing_falls_back_when_quote_unavailable(self, monkeypatch):
+        # A failed quote must never block a trade — degrade to the bar price.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False, live_price=None)
+        lc.run_live_pipeline()
+        assert h["exec"].buys == [("AAPL", 42)]
+        assert "200.00" in " ".join(h["notifier"].msgs)
+
+    def test_fractional_buy_is_placed_as_a_dollar_order(self, monkeypatch):
+        # Fractional slices go out as notional so the spend is exact regardless
+        # of how the price moved since the last bar.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False)
+        class FractionalAllocator(lc.PortfolioAllocator):
+            def calculate_shares(self, *a, **k): return 0.05, True
+            def position_budget(self, base, remaining=None, mult=1.0): return 18.86
+        monkeypatch.setattr(lc, "PortfolioAllocator", FractionalAllocator)
+        lc.run_live_pipeline()
+        assert h["exec"].buys == []                                # no share-qty order
+        assert h["exec"].notional_buys == [("AAPL", 18.86)]        # exact dollars
 
     def test_alpaca_paper_flag_reaches_the_executioner(self, monkeypatch):
         signals = {"latest_signal": 1, "previous_signal": 1,
@@ -1309,6 +1382,24 @@ class TestControllerModes(TestControllerOrchestration):
         lc.run_live_pipeline()
         assert h["exec"].sells == []                         # reversal ignored
 
+    def test_waiting_message_names_the_real_blocker(self, monkeypatch):
+        # Multi-entry modes must NOT claim they need a trend reset — they can
+        # re-arm on an RSI recovery. Here RSI dipped but is still falling.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 40.0, "previous_rsi": 45.0},
+            held=False, mode="Aggressive")
+        lc.run_live_pipeline()
+        sent = " ".join(h["notifier"].msgs).lower()
+        assert "trend reset" not in sent
+        assert "still falling" in sent
+
+    def test_single_entry_message_still_says_trend_reset(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 40.0, "previous_rsi": 45.0},
+            held=False, mode="V4_Legacy")
+        lc.run_live_pipeline()
+        assert "trend reset" in " ".join(h["notifier"].msgs).lower()
+
     def test_multi_entry_requires_rsi_turning_up(self, monkeypatch):
         # Aggressive allows re-entry, but RSI still FALLING must not buy.
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
@@ -1324,35 +1415,14 @@ class TestControllerModes(TestControllerOrchestration):
         lc.run_live_pipeline()
         assert len(h["exec"].buys) == 1                      # RSI dipped and turned up
 
-    def test_multi_entry_blocked_by_cooldown(self, monkeypatch):
+    def test_multi_entry_never_adds_to_an_open_position(self, monkeypatch):
+        # Re-entry is FLAT-only: holding the name must never trigger a second buy
+        # (that would be scale-in/pyramiding, which this system does not do).
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
             "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
-            held=False, mode="Aggressive")
-        h_exec = {}
-        real_make = lc.AlpacaExecutioner
-        def make(*a, **k):
-            ex = real_make(*a, **k)
-            ex.days_since_last_buy = lambda t, lookback_days=90: 0.5   # inside 2-day cooldown
-            h_exec["ex"] = ex
-            return ex
-        monkeypatch.setattr(lc, "AlpacaExecutioner", make)
+            held=True, mode="Aggressive")
         lc.run_live_pipeline()
-        assert h_exec["ex"].buys == []
-
-    def test_multi_entry_blocked_when_history_unreadable(self, monkeypatch):
-        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
-            "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
-            held=False, mode="Aggressive")
-        real_make = lc.AlpacaExecutioner
-        h_exec = {}
-        def make(*a, **k):
-            ex = real_make(*a, **k)
-            ex.days_since_last_buy = lambda t, lookback_days=90: None  # unreadable
-            h_exec["ex"] = ex
-            return ex
-        monkeypatch.setattr(lc, "AlpacaExecutioner", make)
-        lc.run_live_pipeline()
-        assert h_exec["ex"].buys == []          # never authorize on unverifiable cooldown
+        assert h["exec"].buys == []
 
     def test_v4_legacy_single_entry_unchanged(self, monkeypatch):
         # Same setup as the recovery test, but V4_Legacy must NOT re-enter.

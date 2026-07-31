@@ -30,27 +30,42 @@ class PortfolioAllocator:
             return 0.0
         return usable_budget_usd / not_held_count
 
+    def position_budget(self, base_allocation_usd, remaining_budget_usd=None,
+                        conviction_multiplier=1.0):
+        """Dollars to commit to one buy — the sizing decision in its purest form:
+
+            desired_position_usd    = base_allocation_usd * conviction_multiplier
+            affordable_position_usd = min(desired_position_usd, remaining_budget_usd)
+
+        The budget cap is applied AFTER the multiplier. Public because a
+        fractional buy is placed as a NOTIONAL (dollar) order, so the caller
+        needs the dollar figure itself rather than a share count."""
+        if base_allocation_usd is None or base_allocation_usd <= 0:
+            return 0.0
+        affordable_position_usd = base_allocation_usd * conviction_multiplier
+        if remaining_budget_usd is not None:
+            affordable_position_usd = min(affordable_position_usd, remaining_budget_usd)
+        return max(affordable_position_usd, 0.0)
+
     def calculate_shares(self, current_price, base_allocation_usd,
                          remaining_budget_usd=None, conviction_multiplier=1.0,
                          allow_fractional=False):
         """Size one buy. Returns (shares, is_fractional).
 
-            desired_position_usd    = base_allocation_usd * conviction_multiplier
-            affordable_position_usd = min(desired_position_usd, remaining_budget_usd)
+        Whole shares are preferred; if even one whole share is unaffordable and
+        fractional buying is allowed (and the slice clears the dust floor), a
+        sub-1 share quantity is returned instead. (0, False) means buy nothing.
 
-        The budget cap is applied AFTER the multiplier. Whole shares are
-        preferred; if even one whole share is unaffordable and fractional buying
-        is allowed (and the slice clears the dust floor), a sub-1 share quantity
-        is returned instead. (0, False) means buy nothing."""
+        Note the fractional share count is advisory — the controller places
+        fractional buys as notional dollar orders (see position_budget), which
+        removes the price-drift error entirely."""
         if current_price is None or current_price <= 0:
             return 0, False
         if base_allocation_usd is None or base_allocation_usd <= 0:
             return 0, False
 
-        desired_position_usd = base_allocation_usd * conviction_multiplier
-        affordable_position_usd = desired_position_usd
-        if remaining_budget_usd is not None:
-            affordable_position_usd = min(affordable_position_usd, remaining_budget_usd)
+        affordable_position_usd = self.position_budget(
+            base_allocation_usd, remaining_budget_usd, conviction_multiplier)
         if affordable_position_usd <= 0:
             return 0, False
 

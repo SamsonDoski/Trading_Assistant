@@ -29,7 +29,6 @@ class ModeSettings:
     rsi_window: int
     rsi_buy_threshold: float          # buy when RSI dips below this (replaces the old hardcoded 55)
     allow_multi_entry: bool           # re-enter on later RSI-recovery dips in an uptrend
-    reentry_cooldown_days: int        # min days between entries in one name (guards multi-entry)
     # --- exit ---
     exit_on_trend_reversal: bool      # sell when MA_short crosses below MA_long
     trailing_stop_percent: float | None   # broker trailing-stop width; None = no stop
@@ -67,7 +66,7 @@ TRADING_MODES = {
     "V4_Legacy": ModeSettings(
         name="V4_Legacy",
         ma_short=20, ma_long=50, rsi_window=14, rsi_buy_threshold=55,
-        allow_multi_entry=False, reentry_cooldown_days=0,
+        allow_multi_entry=False,
         exit_on_trend_reversal=True, trailing_stop_percent=15.0,
         sell_on_overbought=False, rsi_sell_threshold=70,
         sentiment_enabled=True, conviction_min=0.5, conviction_max=1.5,
@@ -77,7 +76,7 @@ TRADING_MODES = {
     "Aggressive": ModeSettings(
         name="Aggressive",
         ma_short=10, ma_long=30, rsi_window=10, rsi_buy_threshold=55,
-        allow_multi_entry=True, reentry_cooldown_days=2,
+        allow_multi_entry=True,
         exit_on_trend_reversal=True, trailing_stop_percent=6.0,
         sell_on_overbought=True, rsi_sell_threshold=80,
         sentiment_enabled=True, conviction_min=0.5, conviction_max=1.8,
@@ -88,7 +87,7 @@ TRADING_MODES = {
     "Swing": ModeSettings(          # a real swing preset with its own grid — NOT V4.0
         name="Swing",
         ma_short=20, ma_long=50, rsi_window=14, rsi_buy_threshold=55,
-        allow_multi_entry=False, reentry_cooldown_days=0,
+        allow_multi_entry=False,
         exit_on_trend_reversal=True, trailing_stop_percent=15.0,
         sell_on_overbought=False, rsi_sell_threshold=70,
         sentiment_enabled=True, conviction_min=0.5, conviction_max=1.5,
@@ -98,7 +97,7 @@ TRADING_MODES = {
     "Long_Term": ModeSettings(      # hold until the 50/200 trend reverses; no stops
         name="Long_Term",
         ma_short=50, ma_long=200, rsi_window=14, rsi_buy_threshold=40,
-        allow_multi_entry=False, reentry_cooldown_days=0,
+        allow_multi_entry=False,
         exit_on_trend_reversal=True, trailing_stop_percent=None,
         sell_on_overbought=False, rsi_sell_threshold=70,
         sentiment_enabled=True, conviction_min=1.0, conviction_max=1.0,
@@ -109,7 +108,7 @@ TRADING_MODES = {
     "Volatile": ModeSettings(       # high-vol names (TSLA/NVDA): wide stop, room to breathe
         name="Volatile",
         ma_short=15, ma_long=40, rsi_window=14, rsi_buy_threshold=45,
-        allow_multi_entry=True, reentry_cooldown_days=3,
+        allow_multi_entry=True,
         exit_on_trend_reversal=True, trailing_stop_percent=18.0,
         sell_on_overbought=False, rsi_sell_threshold=70,
         sentiment_enabled=True, conviction_min=0.5, conviction_max=1.5,

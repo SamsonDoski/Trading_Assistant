@@ -74,7 +74,7 @@ V4_Legacy reaches production until Phase 6.
 * Controller / executioner / allocator read a resolved `ModeSettings` instead of
   importing config constants (`TRAILING_STOP_PERCENT`, `CASH_RESERVE_PCT`,
   sentiment, conviction band); honor `exit_on_trend_reversal` and
-  `allow_multi_entry` (RSI-recovery trigger + cooldown). Add `config.ACTIVE_MODE`
+  `allow_multi_entry` (RSI-recovery trigger). Add `config.ACTIVE_MODE`
   (Lambda env var).
 * Gate: with `ACTIVE_MODE="V4_Legacy"`, every existing controller test passes
   unchanged. On green, `mainV5.0` becomes the default branch.
@@ -108,7 +108,7 @@ V4_Legacy reaches production until Phase 6.
 Each mode is a bundle of the following fields.
 
 **Entry:** `ma_short`, `ma_long`, `rsi_window`, `rsi_buy_threshold`,
-`allow_multi_entry`, `reentry_cooldown_days`
+`allow_multi_entry`
 **Exit:** `exit_on_trend_reversal`, `trailing_stop_percent` (nullable),
 `sell_on_overbought`, `rsi_sell_threshold`
 **Sizing/capital:** `sentiment_enabled`, `conviction_min`, `conviction_max`,
@@ -124,7 +124,6 @@ it is `None` for every preset (stops consolidated onto the broker trailing stop)
 | rsi_window | from profile* | 10 | 14 | 14 | 14 |
 | rsi_buy_threshold | 55 | 55 | 55 | 40 | 45 |
 | allow_multi_entry | false | true | false | false | true |
-| reentry_cooldown_days | 0 | 2 | 0 | 0 | 3 |
 | exit_on_trend_reversal | true | true | true | true | true |
 | trailing_stop_percent | 15 | 6 | 15 | null (none) | 18 |
 | sell_on_overbought | false | true | false | false | false |
@@ -169,8 +168,9 @@ window, ranks by risk-adjusted score (return / |max drawdown|), and records
 * `exit_on_trend_reversal` gates the MA cross-down sell (true for all shipped modes; the flag
   exists so a future pure-hold mode can set it false).
 * `allow_multi_entry` (Aggressive/Volatile) permits re-entry on an RSI **recovery** dip
-  (RSI below threshold AND turning up), subject to `reentry_cooldown_days`. Buys the bounce,
-  not the descent — never a naive "RSI below X" descent buy.
+  (RSI below threshold AND turning up). Buys the bounce, not the descent — never a
+  naive "RSI below X" descent buy. Re-entry fires ONLY while flat: it can never add
+  to an open position (no scale-in / pyramiding, by design).
 * Long_Term: exit only on 50/200 reversal, no trailing or hard stop — rides drawdowns.
 * Stops consolidated: for every preset `trailing_stop_percent` is the single
   exit-protection and `signal_stop_loss_pct` is `None`. V4_Legacy alone keeps the
@@ -183,7 +183,7 @@ window, ranks by risk-adjusted score (return / |max drawdown|), and records
   `MODE_GRIDS`.
 * `ma_rsi_combo`: buys at `rsi_buy_threshold` not 55; `sell_on_overbought` triggers only when enabled.
 * `live_controller`: `exit_on_trend_reversal=false` suppresses the MA-cross sell; multi-entry
-  fires only on RSI recovery and respects the cooldown; settings thread through to sizing/stop.
+  fires only on RSI recovery and only while flat; settings thread through to sizing/stop.
 * `research`: per-mode grid search stays within its window family; `select_best_mode` records a winner.
 * Regression: `ACTIVE_MODE="V4_Legacy"` reproduces V4.0 numbers on the existing controller tests.
 
@@ -194,7 +194,10 @@ window, ranks by risk-adjusted score (return / |max drawdown|), and records
    (V4_Legacy + existing flat windows), so old profiles keep working.
 3. Unvalidated modes: each mode must be backtested before being flipped live (Phase 6 gate).
    A selectable preset is not a proven strategy.
-4. Multi-entry knife-catching: mitigated by the recovery trigger + cooldown; still the highest-risk flag.
+4. Multi-entry knife-catching: mitigated only by the RSI-recovery trigger (buy the bounce,
+   not the descent) and by being flat-only. Still the highest-risk flag. With no cooldown,
+   a name that is bought, stopped out, and dips-and-recovers again can be re-entered on a
+   subsequent run.
 5. Long_Term with no stop: a genuine reversal that never death-crosses could ride a large drawdown.
    This is intentional (position trading), but must be a conscious user choice.
 

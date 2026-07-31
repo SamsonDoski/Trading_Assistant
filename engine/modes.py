@@ -101,7 +101,7 @@ TRADING_MODES = {
         allow_multi_entry=False, reentry_cooldown_days=0,
         exit_on_trend_reversal=True, trailing_stop_percent=None,
         sell_on_overbought=False, rsi_sell_threshold=70,
-        sentiment_enabled=False, conviction_min=1.0, conviction_max=1.0,
+        sentiment_enabled=True, conviction_min=1.0, conviction_max=1.0,
         cash_reserve_pct=0.05, allow_fractional=True,
         # Long_Term:   after rsi_sell_threshold=70,
         signal_stop_loss_pct=None,

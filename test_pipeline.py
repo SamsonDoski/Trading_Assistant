@@ -549,8 +549,12 @@ class TestControllerOrchestration:
         from engine.sentiment import SentimentReport
         class FakeSentiment:
             def get_verdict(self, t, conviction_min=0.5, conviction_max=1.5):
-                return sentiment_report or SentimentReport(
+                report = sentiment_report or SentimentReport(
                     sentiment_multiplier=1.0, veto=False, rationale="neutral", headlines=[])
+                # Mirror the real analyzer: the mode's band clamps the multiplier.
+                clamped = max(conviction_min,
+                              min(conviction_max, report.sentiment_multiplier))
+                return report.model_copy(update={"sentiment_multiplier": clamped})
         monkeypatch.setattr(lc, "SentimentAnalyzer", FakeSentiment)
         monkeypatch.setattr(lc, "SENTIMENT_MODE", sentiment_mode)
 
@@ -1052,7 +1056,8 @@ class TestTradingModes:
         lt = TRADING_MODES["Long_Term"]
         assert lt.trailing_stop_percent is None
         assert lt.exit_on_trend_reversal is True
-        assert lt.sentiment_enabled is False
+        assert lt.sentiment_enabled is True
+        assert lt.conviction_min == 1.0 and lt.conviction_max == 1.0
 
     def test_settings_are_immutable(self):
         import dataclasses
@@ -1191,7 +1196,7 @@ class TestControllerModes(TestControllerOrchestration):
         lc.run_live_pipeline()
         assert h["exec"].stops == [("AAPL", None)]           # executioner skips on None
 
-    def test_long_term_skips_sentiment(self, monkeypatch):
+    def test_long_term_uses_veto_only_sentiment(self, monkeypatch):
         from engine.sentiment import SentimentReport
         bullish = SentimentReport(sentiment_multiplier=1.5, veto=False,
                                   rationale="great", headlines=[])
@@ -1199,7 +1204,19 @@ class TestControllerModes(TestControllerOrchestration):
             "current_price": 200.0, "current_rsi": 30.0}, held=False,
             sentiment_report=bullish, sentiment_mode="live", mode="Long_Term")
         lc.run_live_pipeline()
-        assert h["exec"].buys == [("AAPL", 42)]              # 1.0x, not 63 — sentiment off
+        # 1.0x, not 63 — Long_Term's 1.0/1.0 band pins the multiplier.
+        assert h["exec"].buys == [("AAPL", 42)]
+
+    def test_long_term_still_honors_veto(self, monkeypatch):
+        from engine.sentiment import SentimentReport
+        toxic = SentimentReport(sentiment_multiplier=0.5, veto=True,
+                                rationale="fraud probe", headlines=[])
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 30.0}, held=False,
+            sentiment_report=toxic, sentiment_mode="live", mode="Long_Term")
+        lc.run_live_pipeline()
+        # The veto is the ONLY entry protection a stopless Long_Term buy has.
+        assert h["exec"].buys == []
 
     def test_hold_through_when_exit_flag_off(self, monkeypatch):
         lc, h = self._wire(monkeypatch, {"latest_signal": 0, "previous_signal": 1,

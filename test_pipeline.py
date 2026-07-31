@@ -277,7 +277,7 @@ class TestScanner:
         monkeypatch.setattr(sm, "apply_combo_strategy", spy)
         sm.StrategyScanner().get_signals("X", self._settings(rsi_buy_threshold=35))
         assert seen["rsi_buy_threshold"] == 35
-        assert seen["stop_loss_pct"] == -0.15        # Swing keeps the V4.0 signal stop
+        assert seen["stop_loss_pct"] == -0.15        # V4_Legacy keeps the V4.0 signal stop
         
 
 

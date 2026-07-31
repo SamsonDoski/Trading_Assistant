@@ -93,8 +93,7 @@ TRADING_MODES = {
         sell_on_overbought=False, rsi_sell_threshold=70,
         sentiment_enabled=True, conviction_min=0.5, conviction_max=1.5,
         cash_reserve_pct=0.15, allow_fractional=True,
-        # Swing:       after rsi_sell_threshold=70,
-        signal_stop_loss_pct=-0.15,      # V4.0 anchor;
+        signal_stop_loss_pct=None,      # consolidated: the trailing stop is the only protection
     ),
     "Long_Term": ModeSettings(      # hold until the 50/200 trend reverses; no stops
         name="Long_Term",

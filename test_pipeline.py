@@ -240,21 +240,45 @@ class TestAllocator:
 
 # ================================================================ NEW: scanner
 class TestScanner:
+    @staticmethod
+    def _settings(**over):
+        from engine.modes import TRADING_MODES
+        from dataclasses import replace
+        return replace(TRADING_MODES["V4_Legacy"], ma_short=5, ma_long=20,
+                       rsi_window=14, **over)
+
     def test_get_signals_contract(self, monkeypatch):
         import engine.scanner as sm
         t = np.arange(400)
         fake = make_price_df(100 + 0.5 * t + 8 * np.sin(t / 10.0))
         monkeypatch.setattr(sm, "fetch_data", lambda *a, **k: fake.copy())
-        d = sm.StrategyScanner().get_signals("AAPL", 5, 20, 14)
-        assert set(d) == {"latest_signal", "previous_signal",
-                          "current_price", "current_rsi"}
+        d = sm.StrategyScanner().get_signals("AAPL", self._settings())
+        assert set(d) == {"latest_signal", "previous_signal", "current_price",
+                          "current_rsi", "previous_rsi"}
         assert d["latest_signal"] in (0, 1)
         assert 0 <= d["current_rsi"] <= 100
 
     def test_get_signals_empty_returns_none(self, monkeypatch):
         import engine.scanner as sm
         monkeypatch.setattr(sm, "fetch_data", lambda *a, **k: pd.DataFrame())
-        assert sm.StrategyScanner().get_signals("X", 5, 20, 14) is None
+        assert sm.StrategyScanner().get_signals("X", self._settings()) is None
+
+    def test_mode_threshold_reaches_the_strategy(self, monkeypatch):
+        # A deep buy threshold must produce no more long bars than a loose one.
+        import engine.scanner as sm
+        t = np.arange(400)
+        fake = make_price_df(100 + 0.2 * t + 20 * np.sin(t / 8.0))
+        seen = {}
+        real = sm.apply_combo_strategy
+        def spy(df, **kw):
+            seen.update(kw)
+            return real(df, **kw)
+        monkeypatch.setattr(sm, "fetch_data", lambda *a, **k: fake.copy())
+        monkeypatch.setattr(sm, "apply_combo_strategy", spy)
+        sm.StrategyScanner().get_signals("X", self._settings(rsi_buy_threshold=35))
+        assert seen["rsi_buy_threshold"] == 35
+        assert seen["stop_loss_pct"] == -0.15        # V4_Legacy keeps the V4.0 signal stop
+        
 
 
 # ================================================================ NEW: notifier
@@ -489,13 +513,24 @@ class TestExecutioner:
         with pytest.raises(Exception):
             em.AlpacaExecutioner("k", "s", paper=True)
 
+    def test_no_stop_when_trail_is_none(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient", self._client_cls({"AAPL": ("0.05", "10")}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.ensure_protective_stop("AAPL", None) is None
+        assert ex.api.submitted == []            # mode runs stopless
+
 
 # ================================================================ NEW: run_live_pipeline() state machine (all modules faked)
 class TestControllerOrchestration:
-    def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0, sentiment_report=None, sentiment_mode="shadow"):
+    def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0,
+              sentiment_report=None, sentiment_mode="shadow", mode="V4_Legacy"):
         import live_controller as lc
         class FakeScanner:
-            def get_signals(self, *a, **k): return signals
+            def get_signals(self, *a, **k):
+                if signals is not None:
+                    signals.setdefault("previous_rsi", signals.get("current_rsi"))
+                return signals
         class FakeAllocator:
             cash_reserve_pct = 0.15
             def __init__(self, *a, **k): pass
@@ -508,12 +543,18 @@ class TestControllerOrchestration:
                 if remaining_budget_usd is not None and remaining_budget_usd < current_price:
                     return 0, False
                 return int(42 * conviction_multiplier), False
+            def base_allocation(self, usable_budget_usd, not_held_count):
+                return usable_budget_usd / max(1, not_held_count)
 
         from engine.sentiment import SentimentReport
         class FakeSentiment:
-            def get_verdict(self, t):
-                return sentiment_report or SentimentReport(
+            def get_verdict(self, t, conviction_min=0.5, conviction_max=1.5):
+                report = sentiment_report or SentimentReport(
                     sentiment_multiplier=1.0, veto=False, rationale="neutral", headlines=[])
+                # Mirror the real analyzer: the mode's band clamps the multiplier.
+                clamped = max(conviction_min,
+                              min(conviction_max, report.sentiment_multiplier))
+                return report.model_copy(update={"sentiment_multiplier": clamped})
         monkeypatch.setattr(lc, "SentimentAnalyzer", FakeSentiment)
         monkeypatch.setattr(lc, "SENTIMENT_MODE", sentiment_mode)
 
@@ -527,6 +568,7 @@ class TestControllerOrchestration:
             def get_unrealized_pl_pct(self, t): return 3.0
             def get_buying_power(self): return buying_power
             def fractionable(self, t): return True
+            def days_since_last_buy(self, t, lookback_days=90): return float("inf")
             def execute_market_buy(self, t, q): self.buys.append((t, q))
             def liquidate_position(self, t): self.sells.append(t)
             def refresh_positions(self): pass
@@ -543,6 +585,7 @@ class TestControllerOrchestration:
         monkeypatch.setattr(lc, "PortfolioAllocator", FakeAllocator)
         monkeypatch.setattr(lc, "DiscordNotifier", FakeNotifier)
         monkeypatch.setattr(lc.time, "sleep", lambda *a, **k: None)
+        monkeypatch.setattr(lc, "ACTIVE_MODE", mode)
         def make_exec(*a, **k):
             holder["exec"] = FakeExec(); return holder["exec"]
         monkeypatch.setattr(lc, "AlpacaExecutioner", make_exec)
@@ -576,7 +619,7 @@ class TestControllerOrchestration:
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
             "current_price": 200.0, "current_rsi": 50.0}, held=True)
         lc.run_live_pipeline()
-        assert h["exec"].stops == [("AAPL", lc.TRAILING_STOP_PERCENT)]
+        assert h["exec"].stops == [("AAPL", 15.0)]   # Swing mode's trailing stop
 
 
     def test_buy_skipped_when_insufficient_buying_power(self, monkeypatch):
@@ -835,8 +878,10 @@ def test_entrypoint_modules_import():
               "research.researcher", "research.backtest", "utils.visualize1",
               "utils.data_loader", "utils.profile_manager", "strategy_config",
               "config", "engine.scanner", "engine.allocator", "engine.executioner",
-              "utils.notifier"):
+              "engine.modes", "utils.notifier"):
         importlib.import_module(m)
+
+
 
 
 
@@ -971,6 +1016,375 @@ class TestSentiment:
         [h] = a.fetch_headlines("NVDA", summary_chars=50)
         assert h.endswith("…")
         assert len(h) < 200              # bounded, not the full 1000 chars
+
+
+
+
+        # ================================================================ NEW: V5.0 trading modes
+class TestTradingModes:
+    def test_all_modes_well_formed(self):
+        from engine.modes import TRADING_MODES
+        for name in ("V4_Legacy", "Aggressive", "Swing", "Long_Term", "Volatile"):
+            m = TRADING_MODES[name]
+            assert m.name == name
+            assert m.ma_short < m.ma_long
+            assert 0 < m.rsi_buy_threshold <= 100
+            assert m.conviction_min <= m.conviction_max
+            assert 0 <= m.cash_reserve_pct < 1
+
+    def test_v4_legacy_matches_v4_behavior(self):
+        # Backward-compat guard: V4_Legacy must equal the deployed V4.0 constants.
+        from engine.modes import TRADING_MODES, DEFAULT_MODE
+        import config
+        assert DEFAULT_MODE == "V4_Legacy"        # the rollback anchor
+        s = TRADING_MODES["V4_Legacy"]
+        assert s.trailing_stop_percent == config.TRAILING_STOP_PERCENT
+        assert s.cash_reserve_pct == config.CASH_RESERVE_PCT
+        assert s.sentiment_enabled is True        # SENTIMENT_MODE == "live"
+        assert s.rsi_buy_threshold == 55          # current hardcoded combo threshold
+        assert s.allow_multi_entry is False       # current single-entry
+        assert s.signal_stop_loss_pct == -0.15    # V4.0 kept the combo hard stop
+
+    def test_v4_legacy_is_not_researched_per_mode(self):
+        # V4_Legacy must stay OUT of the grids, or the research cycle would write
+        # best_windows['V4_Legacy'] and shadow the legacy flat windows.
+        from engine.modes import MODE_GRIDS
+        assert "V4_Legacy" not in MODE_GRIDS
+
+    def test_long_term_holds_with_no_stop(self):
+        from engine.modes import TRADING_MODES
+        lt = TRADING_MODES["Long_Term"]
+        assert lt.trailing_stop_percent is None
+        assert lt.exit_on_trend_reversal is True
+        assert lt.sentiment_enabled is True
+        assert lt.conviction_min == 1.0 and lt.conviction_max == 1.0
+
+    def test_settings_are_immutable(self):
+        import dataclasses
+        from engine.modes import TRADING_MODES
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            TRADING_MODES["Swing"].ma_short = 999
+
+
+class TestModeResolver:
+    def test_named_mode_resolves(self):
+        from engine.modes import ModeResolver
+        assert ModeResolver("Aggressive").settings_for().name == "Aggressive"
+
+    def test_unknown_mode_defaults_to_v4_legacy(self):
+        from engine.modes import ModeResolver
+        assert ModeResolver("does-not-exist").settings_for().name == "V4_Legacy"
+
+    def test_auto_uses_profile_best_mode(self):
+        from engine.modes import ModeResolver
+        s = ModeResolver("Auto").settings_for(profile={"best_mode": "Volatile"})
+        assert s.name == "Volatile"
+
+    def test_auto_falls_back_to_v4_legacy(self):
+        from engine.modes import ModeResolver
+        assert ModeResolver("Auto").settings_for(profile={}).name == "V4_Legacy"
+        assert ModeResolver("Auto").settings_for(profile=None).name == "V4_Legacy"
+
+    def test_v4_legacy_inherits_legacy_per_ticker_windows(self):
+        # Backward compat: V4_Legacy (default) uses the ticker's V4.0-optimized windows.
+        from engine.modes import ModeResolver
+        s = ModeResolver("V4_Legacy").settings_for(
+            profile={"best_short_window": 7, "best_long_window": 33})
+        assert s.ma_short == 7 and s.ma_long == 33
+
+    def test_swing_ignores_legacy_flat_windows(self):
+        # Swing is a preset now, NOT the V4 anchor — it must not inherit the flat
+        # free-searched windows.
+        from engine.modes import ModeResolver, TRADING_MODES
+        s = ModeResolver("Swing").settings_for(
+            profile={"best_short_window": 7, "best_long_window": 33})
+        assert s.ma_short == TRADING_MODES["Swing"].ma_short       # 20, not 7
+        assert s.ma_long == TRADING_MODES["Swing"].ma_long         # 50, not 33
+
+    def test_non_default_mode_ignores_legacy_flat_windows(self):
+        from engine.modes import ModeResolver, TRADING_MODES
+        s = ModeResolver("Long_Term").settings_for(
+            profile={"best_short_window": 7, "best_long_window": 33})
+        assert s.ma_short == TRADING_MODES["Long_Term"].ma_short   # 50, not 7
+        assert s.ma_long == TRADING_MODES["Long_Term"].ma_long     # 200, not 33
+
+    def test_per_mode_researched_windows_win(self):
+        from engine.modes import ModeResolver
+        s = ModeResolver("Long_Term").settings_for(
+            profile={"best_windows": {"Long_Term": {"short": 60, "long": 250}}})
+        assert s.ma_short == 60 and s.ma_long == 250
+
+    def test_auto_combines_best_mode_and_its_windows(self):
+        from engine.modes import ModeResolver
+        s = ModeResolver("Auto").settings_for(profile={
+            "best_mode": "Aggressive",
+            "best_windows": {"Aggressive": {"short": 8, "long": 24}},
+        })
+        assert s.name == "Aggressive" and s.ma_short == 8 and s.ma_long == 24
+
+
+# ================================================================ NEW: V5.0 combo mode thresholds
+class TestComboModeThresholds:
+    def _oscillating_uptrend(self, n=400, amp=20.0):
+        # Rising trend (MA_short > MA_long) with a big oscillation so RSI both
+        # dips below the buy line and runs above the overbought line.
+        t = np.arange(n)
+        return make_price_df(100 + 0.2 * t + amp * np.sin(t / 8.0))
+
+    def test_default_params_reproduce_v4_signals(self):
+        # Backward-compat guard: new defaults == the old hardcoded behavior.
+        from strategies.ma_rsi_combo import apply_combo_strategy
+        df = self._oscillating_uptrend()
+        a = apply_combo_strategy(df.copy(), short_window=5, long_window=20, rsi_window=14)
+        b = apply_combo_strategy(df.copy(), short_window=5, long_window=20, rsi_window=14,
+                                 rsi_buy_threshold=55, sell_on_overbought=False,
+                                 stop_loss_pct=-0.15)
+        assert (a["Signal"].values == b["Signal"].values).all()
+
+    def test_lower_buy_threshold_never_buys_more(self):
+        from strategies.ma_rsi_combo import apply_combo_strategy
+        df = self._oscillating_uptrend()
+        loose = apply_combo_strategy(df.copy(), 5, 20, 14, rsi_buy_threshold=55)
+        strict = apply_combo_strategy(df.copy(), 5, 20, 14, rsi_buy_threshold=35)
+        # A deeper (lower) entry threshold requires deeper dips -> at most as many buy bars.
+        assert (strict["Signal"] == 1).sum() <= (loose["Signal"] == 1).sum()
+
+    def test_sell_on_overbought_forces_exit(self):
+        from strategies.ma_rsi_combo import apply_combo_strategy
+        df = self._oscillating_uptrend()
+        held = apply_combo_strategy(df.copy(), 5, 20, 14, sell_on_overbought=False)
+        assert held["RSI"].max() >= 70                      # precondition: series reaches overbought
+        scalped = apply_combo_strategy(df.copy(), 5, 20, 14,
+                                       sell_on_overbought=True, rsi_sell_threshold=70)
+        assert (scalped["Signal"] == 1).sum() <= (held["Signal"] == 1).sum()   # never holds more
+        assert (scalped["Signal"].values != held["Signal"].values).any()        # and it changed something
+
+    def test_none_stop_disables_signal_stop(self):
+        from strategies.ma_rsi_combo import apply_combo_strategy
+        # Long sustained rise (MA_long ends far BELOW price, so a pullback cannot
+        # trigger the MA cross-down exit), then a sharp ~17% decline. RSI falls
+        # under 55 a few bars into the decline -> entry; price then keeps falling,
+        # so the -5% signal stop is the ONLY exit that can fire. With stop=None
+        # the position is held through the whole decline.
+        prices = list(np.linspace(100, 400, 300)) + list(np.linspace(400, 330, 25))
+        df = make_price_df(prices)
+        tight = apply_combo_strategy(df.copy(), 5, 200, 14, stop_loss_pct=-0.05)
+        nostop = apply_combo_strategy(df.copy(), 5, 200, 14, stop_loss_pct=None)
+
+        held_nostop = (nostop["Signal"] == 1).sum()
+        held_tight = (tight["Signal"] == 1).sum()
+        assert held_nostop > 0                  # precondition: an entry actually happened
+        assert held_nostop > held_tight         # the -5% stop cut the position short
+        assert (nostop["Signal"].values != tight["Signal"].values).any()
+        for out in (tight, nostop):
+            assert "Entry_Price" not in out.columns and "Trade_Return" not in out.columns
+
+
+
+# ================================================================ NEW: V5.0 mode-driven controller behavior
+class TestControllerModes(TestControllerOrchestration):
+    def test_v4_legacy_is_the_baseline(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False, mode="V4_Legacy")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == [("AAPL", 42)]     # fresh-crossover buy, baseline size
+        # (stop attachment is covered by test_protection_pass_attaches_trailing_stop)
+
+    def test_long_term_attaches_no_stop(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 50.0}, held=True, mode="Long_Term")
+        lc.run_live_pipeline()
+        assert h["exec"].stops == [("AAPL", None)]           # executioner skips on None
+
+    def test_long_term_uses_veto_only_sentiment(self, monkeypatch):
+        from engine.sentiment import SentimentReport
+        bullish = SentimentReport(sentiment_multiplier=1.5, veto=False,
+                                  rationale="great", headlines=[])
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 30.0}, held=False,
+            sentiment_report=bullish, sentiment_mode="live", mode="Long_Term")
+        lc.run_live_pipeline()
+        # 1.0x, not 63 — Long_Term's 1.0/1.0 band pins the multiplier.
+        assert h["exec"].buys == [("AAPL", 42)]
+
+    def test_long_term_still_honors_veto(self, monkeypatch):
+        from engine.sentiment import SentimentReport
+        toxic = SentimentReport(sentiment_multiplier=0.5, veto=True,
+                                rationale="fraud probe", headlines=[])
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 30.0}, held=False,
+            sentiment_report=toxic, sentiment_mode="live", mode="Long_Term")
+        lc.run_live_pipeline()
+        # The veto is the ONLY entry protection a stopless Long_Term buy has.
+        assert h["exec"].buys == []
+
+    def test_hold_through_when_exit_flag_off(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 0, "previous_signal": 1,
+            "current_price": 180.0, "current_rsi": 60.0}, held=True, mode="V4_Legacy")
+        import engine.modes as mm
+        from dataclasses import replace
+        holder = replace(mm.TRADING_MODES["V4_Legacy"], exit_on_trend_reversal=False)
+        monkeypatch.setitem(mm.TRADING_MODES, "V4_Legacy", holder)
+        lc.run_live_pipeline()
+        assert h["exec"].sells == []                         # reversal ignored
+
+    def test_multi_entry_requires_rsi_turning_up(self, monkeypatch):
+        # Aggressive allows re-entry, but RSI still FALLING must not buy.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 40.0, "previous_rsi": 45.0},
+            held=False, mode="Aggressive")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == []
+
+    def test_multi_entry_buys_the_recovery(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
+            held=False, mode="Aggressive")
+        lc.run_live_pipeline()
+        assert len(h["exec"].buys) == 1                      # RSI dipped and turned up
+
+    def test_multi_entry_blocked_by_cooldown(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
+            held=False, mode="Aggressive")
+        h_exec = {}
+        real_make = lc.AlpacaExecutioner
+        def make(*a, **k):
+            ex = real_make(*a, **k)
+            ex.days_since_last_buy = lambda t, lookback_days=90: 0.5   # inside 2-day cooldown
+            h_exec["ex"] = ex
+            return ex
+        monkeypatch.setattr(lc, "AlpacaExecutioner", make)
+        lc.run_live_pipeline()
+        assert h_exec["ex"].buys == []
+
+    def test_multi_entry_blocked_when_history_unreadable(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
+            held=False, mode="Aggressive")
+        real_make = lc.AlpacaExecutioner
+        h_exec = {}
+        def make(*a, **k):
+            ex = real_make(*a, **k)
+            ex.days_since_last_buy = lambda t, lookback_days=90: None  # unreadable
+            h_exec["ex"] = ex
+            return ex
+        monkeypatch.setattr(lc, "AlpacaExecutioner", make)
+        lc.run_live_pipeline()
+        assert h_exec["ex"].buys == []          # never authorize on unverifiable cooldown
+
+    def test_v4_legacy_single_entry_unchanged(self, monkeypatch):
+        # Same setup as the recovery test, but V4_Legacy must NOT re-enter.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 1,
+            "current_price": 200.0, "current_rsi": 45.0, "previous_rsi": 40.0},
+            held=False, mode="V4_Legacy")
+        lc.run_live_pipeline()
+        assert h["exec"].buys == []
+
+# ================================================================ NEW: V5.0 per-mode research
+class TestPerModeOptimizer:
+    @staticmethod
+    def _fake_df(n=900):
+        idx = pd.date_range("2021-01-01", periods=n, freq="D")
+        t = np.arange(n)
+        return pd.DataFrame({"Close": 100 + 0.15 * t + 12 * np.sin(t / 20.0)}, index=idx)
+
+    def test_mode_grids_cover_researched_modes(self):
+        # Every mode EXCEPT V4_Legacy is researched per-mode; V4_Legacy's windows
+        # come from the legacy flat profile fields instead.
+        from engine.modes import TRADING_MODES, MODE_GRIDS
+        assert set(MODE_GRIDS) == set(TRADING_MODES) - {"V4_Legacy"}
+        for shorts, longs in MODE_GRIDS.values():
+            assert min(shorts) < max(longs)
+
+    def test_optimize_for_mode_stays_in_its_window_family(self, monkeypatch):
+        import research.run_optimizer as opt
+        from engine.modes import MODE_GRIDS
+        monkeypatch.setattr(opt, "fetch_data", lambda *a, **k: self._fake_df())
+        rec = opt.optimize_for_mode("X", "Long_Term", "2022-01-01", "2023-06-01",
+                                    verbose=False)
+        shorts, longs = MODE_GRIDS["Long_Term"]
+        assert rec["short"] in shorts and rec["long"] in longs
+
+    def test_unknown_mode_returns_none(self, monkeypatch):
+        import research.run_optimizer as opt
+        monkeypatch.setattr(opt, "fetch_data", lambda *a, **k: self._fake_df())
+        assert opt.optimize_for_mode("X", "NotAMode", "2022-01-01", "2023-01-01") is None
+
+    def test_select_best_mode_picks_top_score(self, monkeypatch):
+        import research.run_optimizer as opt
+        from engine.modes import MODE_GRIDS
+        monkeypatch.setattr(opt, "fetch_data", lambda *a, **k: self._fake_df())
+        best, records = opt.select_best_mode("X", "2022-01-01", "2023-06-01",
+                                             verbose=False)
+        assert best in MODE_GRIDS
+        assert records[best]["score"] == max(r["score"] for r in records.values())
+
+
+class TestProfileSchemaV5:
+    def test_update_profile_preserves_v5_fields(self, monkeypatch, tmp_path):
+        import utils.profile_manager as pm
+        import research.researcher as rsr
+        monkeypatch.setattr(pm, "PROFILE_FILE", str(tmp_path / "p.json"))
+        pm.save_profiles({"AAPL": {"best_mode": "Volatile",
+                                   "best_windows": {"Volatile": {"short": 15, "long": 40}}}})
+        rsr.update_profile("AAPL", 20, 50)
+        saved = pm.load_profiles()["AAPL"]
+        assert saved["best_short_window"] == 20        # legacy fields updated
+        assert saved["best_mode"] == "Volatile"        # V5 fields survived the merge
+        assert saved["best_windows"]["Volatile"]["short"] == 15
+
+    def test_update_mode_research_writes_schema(self, monkeypatch, tmp_path):
+        import utils.profile_manager as pm
+        import research.researcher as rsr
+        monkeypatch.setattr(pm, "PROFILE_FILE", str(tmp_path / "p.json"))
+        records = {
+            "Swing": {"short": 20, "long": 50, "score": 1.0,
+                      "return_pct": 10.0, "max_dd_pct": -10.0},
+            "Volatile": {"short": 15, "long": 40, "score": 2.5,
+                         "return_pct": 25.0, "max_dd_pct": -10.0},
+        }
+        rsr.update_mode_research("NVDA", "Volatile", records)
+        saved = pm.load_profiles()["NVDA"]
+        assert saved["best_mode"] == "Volatile"
+        assert saved["best_windows"]["Volatile"] == {"short": 15, "long": 40}
+        assert saved["best_windows"]["Swing"] == {"short": 20, "long": 50}
+        assert saved["mode_scores"]["Volatile"]["score"] == 2.5
+
+    def test_resolver_reads_migrated_schema(self, monkeypatch, tmp_path):
+        # End-to-end: research output feeds the Phase-1 resolver.
+        from engine.modes import ModeResolver
+        profile = {"best_mode": "Volatile",
+                   "best_windows": {"Volatile": {"short": 15, "long": 40}}}
+        s = ModeResolver("Auto").settings_for(profile)
+        assert s.name == "Volatile" and s.ma_short == 15 and s.ma_long == 40
+
+
+class TestResearchCycleModes:
+    def test_per_mode_cycle_records_winner(self, monkeypatch):
+        import research.researcher as rsr
+        got = {}
+        monkeypatch.setattr(rsr, "is_stale", lambda t: True)
+        monkeypatch.setattr(rsr, "select_best_mode",
+                            lambda t, s, e: ("Volatile", {"Volatile": {
+                                "short": 15, "long": 40, "score": 2.0,
+                                "return_pct": 20.0, "max_dd_pct": -10.0}}))
+        monkeypatch.setattr(rsr, "update_mode_research",
+                            lambda t, m, r: got.__setitem__(t, m))
+        rsr.run_research_cycle(["NVDA"], per_mode=True)
+        assert got == {"NVDA": "Volatile"}
+
+    def test_legacy_cycle_still_default(self, monkeypatch):
+        import research.researcher as rsr
+        got = []
+        monkeypatch.setattr(rsr, "is_stale", lambda t: True)
+        monkeypatch.setattr(rsr, "run_optimization", lambda *a, **k: (10, 40))
+        monkeypatch.setattr(rsr, "update_profile", lambda t, s, l: got.append((t, s, l)))
+        rsr.run_research_cycle(["AAPL"])            # per_mode defaults False
+        assert got == [("AAPL", 10, 40)]
+
+
+
 # ================================================================ documented exclusions
 @pytest.mark.skip(reason="Manual live-account scripts: they touch Alpaca at import "
                          "(v3_first_order.py even places an order). Not unit-testable "

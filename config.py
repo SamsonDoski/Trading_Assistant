@@ -1,4 +1,5 @@
 # config.py
+import os
 
 # -----------------
 # Data Fetch Settings
@@ -55,3 +56,12 @@ ALLOW_FRACTIONAL = True
 
 # Skip a fractional buy whose dollar size is below this — avoids buying dust.
 MIN_FRACTIONAL_NOTIONAL_USD = 1.00
+
+# -----------------
+# Active Trading Mode (V5.0)
+# -----------------
+# "V4_Legacy" | "Aggressive" | "Swing" | "Long_Term" | "Volatile" | "Auto"
+# Read from the environment so the Lambda can switch modes WITHOUT a redeploy.
+# "V4_Legacy" == deployed V4.0 behavior (legacy free-searched per-ticker windows)
+# — the safe rollback value. NOTE "Swing" is a preset with its own grid, NOT V4.0.
+ACTIVE_MODE = os.getenv("ACTIVE_MODE", "V4_Legacy")

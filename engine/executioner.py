@@ -108,6 +108,36 @@ class AlpacaExecutioner:
         except Exception as e:
             print(f"❌ Failed to execute BUY for {ticker}: {e}")
 
+
+    def days_since_last_buy(self, ticker, lookback_days=90):
+        """Days since the most recent FILLED buy on this symbol.
+        `inf` = no buy found in the lookback (cooldown trivially satisfied).
+        `None` = history unreadable — caller must treat that as NOT satisfied,
+        so an unverifiable cooldown can never authorize an extra entry."""
+        now = datetime.now(timezone.utc)
+        try:
+            req = GetOrdersRequest(
+                status=QueryOrderStatus.CLOSED,
+                after=now - timedelta(days=lookback_days),
+                symbols=[ticker],
+                limit=200,
+            )
+            orders = self.api.get_orders(filter=req)
+        except Exception as e:
+            print(f"⚠️ Could not read buy history for {ticker}: {e}")
+            return None
+        newest = None
+        for o in orders:
+            side = str(getattr(o, "side", "") or "").lower()
+            status = str(getattr(o, "status", "") or "").lower()
+            if "buy" in side and "filled" in status:
+                ts = getattr(o, "filled_at", None) or getattr(o, "submitted_at", None)
+                if ts is not None and (newest is None or ts > newest):
+                    newest = ts
+        if newest is None:
+            return float("inf")
+        return (now - newest).total_seconds() / 86400.0
+
     def ensure_protective_stop(self, ticker, stop_percent):
         """Attach the right kind of broker-side stop to a held position, or sell
         it if it's already past its stop. Returns a Discord-ready status line, or
@@ -124,6 +154,8 @@ class AlpacaExecutioner:
         pos = self._positions.get(ticker)
         if pos is None:
             return None
+        if stop_percent is None:
+            return None   # mode runs without stops (Long_Term rides drawdowns)
         if ticker in self._open_order_symbols:
             return None  # already protected this session — don't stack
 

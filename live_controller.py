@@ -8,8 +8,8 @@ from utils.notifier import DiscordNotifier
 from engine.scanner import StrategyScanner
 from engine.allocator import PortfolioAllocator
 from engine.executioner import AlpacaExecutioner
-from config import (TRAILING_STOP_PERCENT, SENTIMENT_MODE, CASH_RESERVE_PCT,
-                    ALLOW_FRACTIONAL, MIN_FRACTIONAL_NOTIONAL_USD)
+from engine.modes import ModeResolver
+from config import (SENTIMENT_MODE, MIN_FRACTIONAL_NOTIONAL_USD, ACTIVE_MODE)
 from engine.sentiment import SentimentAnalyzer
 
 
@@ -17,17 +17,24 @@ def run_live_pipeline():
     """
     The True Controller: orchestrates the pipeline by passing data between
     isolated micro-modules. It decides actions; the modules do the work.
+
+    V5.0: every strategy/risk parameter arrives as a resolved ModeSettings from
+    the ModeResolver, per ticker. ACTIVE_MODE="Swing" reproduces V4.0 exactly.
     """
     load_dotenv()
-    print("⚙️ Initializing V4.0 True Controller...")
+    print(f"⚙️ Initializing V5.0 Controller | mode: {ACTIVE_MODE}")
 
     # 1. Wire up the micro-modules
     notifier = DiscordNotifier()
     scanner = StrategyScanner()
-    allocator = PortfolioAllocator(
-            cash_reserve_pct=CASH_RESERVE_PCT,
-            min_fractional_notional_usd=MIN_FRACTIONAL_NOTIONAL_USD,)
     sentiment = SentimentAnalyzer()
+
+    resolver = ModeResolver(ACTIVE_MODE)
+    portfolio = resolver.portfolio_settings()      # account-level policy (cash reserve)
+    allocator = PortfolioAllocator(
+        cash_reserve_pct=portfolio.cash_reserve_pct,
+        min_fractional_notional_usd=MIN_FRACTIONAL_NOTIONAL_USD,
+    )
 
     api_key = os.getenv("ALPACA_API_KEY")
     secret_key = os.getenv("ALPACA_SECRET_KEY")
@@ -47,12 +54,11 @@ def run_live_pipeline():
 
     greeting = "Good Morning" if datetime.now(timezone.utc).hour < 16 else "Good Evening"
     notifier.send_message(
-        f"{greeting}, Olajide. Running Trading Assistant Engine..."
+        f"{greeting}, Olajide. Running Trading Assistant Engine | mode: **{ACTIVE_MODE}**"
     )
 
     # Session budget: deployable buying power after the cash reserve, split
-    # equally across the watchlist names we don't already hold. That slice is
-    # the pre-conviction base; sentiment scales it per buy.
+    # equally across watchlist names we don't already hold.
     buying_power = executioner.get_buying_power()
     usable_budget_usd = allocator.usable_budget(buying_power)
     remaining_budget_usd = usable_budget_usd
@@ -64,7 +70,7 @@ def run_live_pipeline():
     print(bp_msg)
     notifier.send_message(bp_msg)
 
-     # Report any positions the broker stopped out while we were asleep.
+    # Report any positions the broker stopped out while we were asleep.
     for symbol, qty, fill_price, pl_pct, pl_usd in executioner.get_recent_stopouts(hours=24):
         so_msg = f"🛑 STOPPED OUT: {symbol} — {qty} shares @ ${float(fill_price):.2f}"
         if pl_pct is not None:
@@ -83,12 +89,11 @@ def run_live_pipeline():
                 notifier.send_message(msg)
                 continue
 
-            short_ma = rules["best_short_window"]
-            long_ma = rules["best_long_window"]
-            rsi_period = rules.get("rsi_period", 14)
+            # Resolve this ticker's mode settings (Auto -> its researched mode).
+            settings = resolver.settings_for(rules)
 
-            # Step A: Scanner (the brain) does all the math
-            signals = scanner.get_signals(ticker, short_ma, long_ma, rsi_period)
+            # Step A: Scanner (the brain) does all the math, mode-parameterized
+            signals = scanner.get_signals(ticker, settings)
             if not signals:
                 msg = f"🔍 **{ticker}** | ❌ Data fetch failed."
                 print(msg)
@@ -99,33 +104,61 @@ def run_live_pipeline():
             previous_signal = signals["previous_signal"]
             price = signals["current_price"]
             rsi = signals["current_rsi"]
+            previous_rsi = signals.get("previous_rsi")
 
             # Step B: Executioner reports state (no raw SDK objects leak in here)
             holding = executioner.is_holding(ticker)
 
-           # Step C: State machine — this is the controller's real job
-            if latest_signal == 1 and previous_signal == 0 and not holding:
-                report = sentiment.get_verdict(ticker)
-                mode_tag = "LIVE" if SENTIMENT_MODE == "live" else "SHADOW"
-                notifier.send_message(
-                    f"📰 **{ticker}** | sentiment x{report.sentiment_multiplier:.2f}"
-                    f"{' + VETO' if report.veto else ''} [{mode_tag}] — {report.rationale}"
-                )
-                if report.headlines:
-                    digest = "\n".join(f"• {h[:120]}" for h in report.headlines[:5])
-                    notifier.send_message(f"🗞️ **{ticker}** headlines considered:\n{digest}")
+            # Step C: State machine — this is the controller's real job
+            fresh_entry = (latest_signal == 1 and previous_signal == 0 and not holding)
 
-                if SENTIMENT_MODE == "live" and report.veto:
-                    state_msg = f"⛔ BUY VETOED by sentiment — {report.rationale}"
-                else:
+            # Multi-entry re-entry (Aggressive/Volatile): the trend never broke but
+            # we're flat (e.g. stopped out). Require an RSI dip that is TURNING UP
+            # — buy the bounce, never the descent — plus a cooldown.
+            recovery_entry = False
+            if (settings.allow_multi_entry and not holding
+                    and latest_signal == 1 and not fresh_entry):
+                dipped = rsi < settings.rsi_buy_threshold
+                turning_up = previous_rsi is not None and rsi > previous_rsi
+                if dipped and turning_up:
+                    days = executioner.days_since_last_buy(ticker)
+                    # None = history unreadable -> refuse the extra entry.
+                    recovery_entry = (days is not None
+                                      and days >= settings.reentry_cooldown_days)
+
+            if fresh_entry or recovery_entry:
+                entry_kind = "fresh crossover" if fresh_entry else "RSI-recovery re-entry"
+
+                report = None
+                if settings.sentiment_enabled:
+                    report = sentiment.get_verdict(
+                        ticker,
+                        conviction_min=settings.conviction_min,
+                        conviction_max=settings.conviction_max,
+                    )
+                    mode_tag = "LIVE" if SENTIMENT_MODE == "live" else "SHADOW"
+                    notifier.send_message(
+                        f"📰 **{ticker}** | sentiment x{report.sentiment_multiplier:.2f}"
+                        f"{' + VETO' if report.veto else ''} [{mode_tag}] — {report.rationale}"
+                    )
+                    if report.headlines:
+                        digest = "\n".join(f"• {h[:120]}" for h in report.headlines[:5])
+                        notifier.send_message(f"🗞️ **{ticker}** headlines considered:\n{digest}")
+                    vetoed = (SENTIMENT_MODE == "live" and report.veto)
                     conviction_multiplier = (report.sentiment_multiplier
                                              if SENTIMENT_MODE == "live" else 1.0)
+                else:
+                    vetoed, conviction_multiplier = False, 1.0
+
+                if vetoed:
+                    state_msg = f"⛔ BUY VETOED by sentiment — {report.rationale}"
+                else:
                     shares, is_fractional = allocator.calculate_shares(
                         current_price=price,
                         base_allocation_usd=base_allocation_usd,
                         remaining_budget_usd=remaining_budget_usd,
                         conviction_multiplier=conviction_multiplier,
-                        allow_fractional=ALLOW_FRACTIONAL,
+                        allow_fractional=settings.allow_fractional,
                     )
                     if is_fractional and not executioner.fractionable(ticker):
                         state_msg = (f"⏸️ BUY signal — one whole share (${price:.2f}) exceeds this "
@@ -139,30 +172,40 @@ def run_live_pipeline():
                             stop_desc = "software-trailing DAY stop"
                         else:
                             fill_desc = f"{int(shares)} shares"
-                            stop_desc = "trailing stop"
-                        state_msg = (f"🚀 BUY EXECUTED: {fill_desc} @ ${price:.2f} "
+                            stop_desc = ("trailing stop" if settings.trailing_stop_percent
+                                         else "no stop (mode)")
+                        state_msg = (f"🚀 BUY EXECUTED ({entry_kind}): {fill_desc} @ ${price:.2f} "
                                      f"[{stop_desc}] (deployable left: ${remaining_budget_usd:,.0f})")
                     else:
                         state_msg = "⏸️ BUY signal — skipped, insufficient deployable budget."
 
             elif latest_signal == 0 and holding:
-                pl = executioner.get_unrealized_pl_pct(ticker)
-                executioner.liquidate_position(ticker)
-                state_msg = f"🛑 SELL EXECUTED (Liquidated) (P/L: {pl:+.2f}%)"
+                if settings.exit_on_trend_reversal:
+                    pl = executioner.get_unrealized_pl_pct(ticker)
+                    executioner.liquidate_position(ticker)
+                    state_msg = f"🛑 SELL EXECUTED (trend reversal) (P/L: {pl:+.2f}%)"
+                else:
+                    pl = executioner.get_unrealized_pl_pct(ticker)
+                    state_msg = (f"⏳ Trend reversed but this mode holds through "
+                                 f"(P/L: {pl:+.2f}%)")
 
             elif latest_signal == 1 and holding:
                 pl = executioner.get_unrealized_pl_pct(ticker)
                 state_msg = f"⏳ Holding (P/L: {pl:+.2f}%)"
 
             elif latest_signal == 1 and previous_signal == 1 and not holding:
-                state_msg = "⏳ Trend positive but missed RSI dip. Waiting for next RSI reset."
+                # The signal is continuously 1 — it was armed on an earlier dip and
+                # ffills until the trend reverses, so an RSI reset alone can NOT
+                # re-arm it. Only a trend reset (or a multi-entry mode) re-enters.
+                state_msg = ("⏳ Trend positive, entry dip already passed. "
+                             "Waiting for a trend reset to re-arm.")
 
             else:
                 state_msg = "⏳ Waiting, Trend negative or RSI is high."
 
             # Step D: Notifier announces the result
             log_msg = (
-                f"🔍 **{ticker}** | MA: {short_ma}/{long_ma} | "
+                f"🔍 **{ticker}** [{settings.name}] | MA: {settings.ma_short}/{settings.ma_long} | "
                 f"Price: ${price:.2f} | RSI: {rsi:.1f} | Sig: {latest_signal} | {state_msg}"
             )
             print(log_msg)
@@ -173,19 +216,21 @@ def run_live_pipeline():
             print(err)
             notifier.send_message(err)
 
-    # 4. Protection pass — ensure every open position carries a broker-side
-    #    trailing stop. Pause first so market-open fills for THIS run's buys
-    #    settle and get protected now, instead of waiting until tomorrow.
-    time.sleep(10)  # Pause for 10 seconds
+    # 4. Protection pass — ensure every open position carries the stop its mode
+    #    prescribes. Pause first so market-open fills for THIS run's buys settle
+    #    and get protected now, instead of waiting until tomorrow.
+    time.sleep(10)
     executioner.refresh_positions()
     executioner.refresh_open_orders()
     for ticker in executioner.held_symbols():
-        status_msg = executioner.ensure_protective_stop(ticker, TRAILING_STOP_PERCENT)
+        held_settings = resolver.settings_for(profiles.get(ticker))
+        status_msg = executioner.ensure_protective_stop(
+            ticker, held_settings.trailing_stop_percent)
         if status_msg:
             print(status_msg)
             notifier.send_message(status_msg)
 
-    print("✅ V4.0 Pipeline Execution Complete.")
+    print("✅ V5.0 Pipeline Execution Complete.")
 
 
 if __name__ == "__main__":

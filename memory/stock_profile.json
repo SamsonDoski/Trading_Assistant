@@ -1,170 +1,1178 @@
 {
     "NVDA": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 20,
+                "long": 50
+            },
+            "Aggressive": {
+                "short": 5,
+                "long": 25
+            },
+            "Long_Term": {
+                "short": 50,
+                "long": 200
+            },
+            "Volatile": {
+                "short": 20,
+                "long": 40
+            }
+        },
+        "best_mode": "Long_Term",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 1.7047,
+                "return_pct": 49.23,
+                "max_dd_pct": -28.88
+            },
+            "Swing": {
+                "score": 4.3245,
+                "return_pct": 99.95,
+                "max_dd_pct": -23.11
+            },
+            "Long_Term": {
+                "score": 8.1134,
+                "return_pct": 230.49,
+                "max_dd_pct": -28.41
+            },
+            "Volatile": {
+                "score": 7.0175,
+                "return_pct": 144.71,
+                "max_dd_pct": -20.62
+            }
+        },
+        "mode_qualified": true
     },
     "AAPL": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 40,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 20,
+                "long": 60
+            },
+            "Aggressive": {
+                "short": 5,
+                "long": 25
+            },
+            "Long_Term": {
+                "short": 60,
+                "long": 250
+            },
+            "Volatile": {
+                "short": 10,
+                "long": 50
+            }
+        },
+        "best_mode": "Swing",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 0.5459,
+                "return_pct": 10.26,
+                "max_dd_pct": -18.79
+            },
+            "Swing": {
+                "score": 2.43,
+                "return_pct": 44.08,
+                "max_dd_pct": -18.14
+            },
+            "Long_Term": {
+                "score": 0.566,
+                "return_pct": 18.88,
+                "max_dd_pct": -33.36
+            },
+            "Volatile": {
+                "score": 2.0085,
+                "return_pct": 26.75,
+                "max_dd_pct": -13.32
+            }
+        },
+        "mode_qualified": true
     },
     "MSFT": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 5,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 15,
+                "long": 50
+            },
+            "Aggressive": {
+                "short": 10,
+                "long": 20
+            },
+            "Long_Term": {
+                "short": 50,
+                "long": 150
+            },
+            "Volatile": {
+                "short": 10,
+                "long": 50
+            }
+        },
+        "best_mode": "Long_Term",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 0.3388,
+                "return_pct": 6.73,
+                "max_dd_pct": -19.88
+            },
+            "Swing": {
+                "score": 0.0861,
+                "return_pct": 2.1,
+                "max_dd_pct": -24.35
+            },
+            "Long_Term": {
+                "score": 1.3531,
+                "return_pct": 24.0,
+                "max_dd_pct": -17.74
+            },
+            "Volatile": {
+                "score": -0.5649,
+                "return_pct": -4.84,
+                "max_dd_pct": -8.58
+            }
+        },
+        "mode_qualified": false
     },
     "TSLA": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 5,
         "best_long_window": 30,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 25,
+                "long": 50
+            },
+            "Aggressive": {
+                "short": 12,
+                "long": 30
+            },
+            "Long_Term": {
+                "short": 50,
+                "long": 150
+            },
+            "Volatile": {
+                "short": 15,
+                "long": 35
+            }
+        },
+        "best_mode": "Aggressive",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 3.5295,
+                "return_pct": 79.5,
+                "max_dd_pct": -22.53
+            },
+            "Swing": {
+                "score": 2.2501,
+                "return_pct": 71.58,
+                "max_dd_pct": -31.81
+            },
+            "Long_Term": {
+                "score": 0.6229,
+                "return_pct": 33.45,
+                "max_dd_pct": -53.71
+            },
+            "Volatile": {
+                "score": 2.1325,
+                "return_pct": 37.1,
+                "max_dd_pct": -17.4
+            }
+        },
+        "mode_qualified": true
     },
     "AMZN": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 5,
         "best_long_window": 30,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 15,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 12,
+                "long": 25
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 200
+            },
+            "Volatile": {
+                "short": 10,
+                "long": 40
+            }
+        },
+        "best_mode": "Aggressive",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 2.1876,
+                "return_pct": 38.81,
+                "max_dd_pct": -17.74
+            },
+            "Swing": {
+                "score": 1.7998,
+                "return_pct": 39.68,
+                "max_dd_pct": -22.05
+            },
+            "Long_Term": {
+                "score": 1.0842,
+                "return_pct": 31.98,
+                "max_dd_pct": -29.5
+            },
+            "Volatile": {
+                "score": 1.2475,
+                "return_pct": 24.34,
+                "max_dd_pct": -19.51
+            }
+        },
+        "mode_qualified": true
     },
     "META": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 20,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 25,
+                "long": 60
+            },
+            "Aggressive": {
+                "short": 10,
+                "long": 40
+            },
+            "Long_Term": {
+                "short": 60,
+                "long": 250
+            },
+            "Volatile": {
+                "short": 10,
+                "long": 40
+            }
+        },
+        "best_mode": "Volatile",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 1.1082,
+                "return_pct": 25.34,
+                "max_dd_pct": -22.87
+            },
+            "Swing": {
+                "score": 2.9119,
+                "return_pct": 67.78,
+                "max_dd_pct": -23.28
+            },
+            "Long_Term": {
+                "score": 3.9294,
+                "return_pct": 134.19,
+                "max_dd_pct": -34.15
+            },
+            "Volatile": {
+                "score": 6.4792,
+                "return_pct": 92.5,
+                "max_dd_pct": -14.28
+            }
+        },
+        "mode_qualified": true
     },
     "GOOGL": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 20,
         "best_long_window": 200,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 20,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 8,
+                "long": 40
+            },
+            "Long_Term": {
+                "short": 50,
+                "long": 250
+            },
+            "Volatile": {
+                "short": 20,
+                "long": 35
+            }
+        },
+        "best_mode": "Volatile",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 8.3818,
+                "return_pct": 139.56,
+                "max_dd_pct": -16.65
+            },
+            "Swing": {
+                "score": 7.2273,
+                "return_pct": 110.3,
+                "max_dd_pct": -15.26
+            },
+            "Long_Term": {
+                "score": 1.0661,
+                "return_pct": 34.4,
+                "max_dd_pct": -32.26
+            },
+            "Volatile": {
+                "score": 9.7284,
+                "return_pct": 145.99,
+                "max_dd_pct": -15.01
+            }
+        },
+        "mode_qualified": true
     },
     "NFLX": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 25,
+                "long": 50
+            },
+            "Aggressive": {
+                "short": 5,
+                "long": 30
+            },
+            "Long_Term": {
+                "short": 50,
+                "long": 150
+            },
+            "Volatile": {
+                "short": 20,
+                "long": 50
+            }
+        },
+        "best_mode": "Long_Term",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 4.1742,
+                "return_pct": 46.54,
+                "max_dd_pct": -11.15
+            },
+            "Swing": {
+                "score": 2.6374,
+                "return_pct": 54.7,
+                "max_dd_pct": -20.74
+            },
+            "Long_Term": {
+                "score": 5.4652,
+                "return_pct": 104.67,
+                "max_dd_pct": -19.15
+            },
+            "Volatile": {
+                "score": 1.036,
+                "return_pct": 17.54,
+                "max_dd_pct": -16.93
+            }
+        },
+        "mode_qualified": true
     },
     "AMD": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 5,
         "best_long_window": 30,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 20,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 8,
+                "long": 20
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 250
+            },
+            "Volatile": {
+                "short": 20,
+                "long": 40
+            }
+        },
+        "best_mode": "Long_Term",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 6.1322,
+                "return_pct": 182.59,
+                "max_dd_pct": -29.77
+            },
+            "Swing": {
+                "score": 0.7586,
+                "return_pct": 32.34,
+                "max_dd_pct": -42.62
+            },
+            "Long_Term": {
+                "score": 6.9051,
+                "return_pct": 191.69,
+                "max_dd_pct": -27.76
+            },
+            "Volatile": {
+                "score": 1.5982,
+                "return_pct": 49.12,
+                "max_dd_pct": -30.74
+            }
+        },
+        "mode_qualified": true
     },
     "SMCI": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 25,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 8,
+                "long": 25
+            },
+            "Long_Term": {
+                "short": 60,
+                "long": 150
+            },
+            "Volatile": {
+                "short": 20,
+                "long": 35
+            }
+        },
+        "best_mode": "Volatile",
+        "mode_scores": {
+            "Aggressive": {
+                "score": -0.0656,
+                "return_pct": -4.29,
+                "max_dd_pct": -65.43
+            },
+            "Swing": {
+                "score": -0.1212,
+                "return_pct": -9.64,
+                "max_dd_pct": -79.53
+            },
+            "Long_Term": {
+                "score": 0.1866,
+                "return_pct": 9.45,
+                "max_dd_pct": -50.66
+            },
+            "Volatile": {
+                "score": 0.9586,
+                "return_pct": 61.93,
+                "max_dd_pct": -64.6
+            }
+        },
+        "mode_qualified": false
     },
     "GLD": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 20,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 15,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 5,
+                "long": 40
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 150
+            },
+            "Volatile": {
+                "short": 15,
+                "long": 40
+            }
+        },
+        "best_mode": "Aggressive",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 6.1456,
+                "return_pct": 77.13,
+                "max_dd_pct": -12.55
+            },
+            "Swing": {
+                "score": 4.507,
+                "return_pct": 75.07,
+                "max_dd_pct": -16.66
+            },
+            "Long_Term": {
+                "score": 5.7323,
+                "return_pct": 115.2,
+                "max_dd_pct": -20.1
+            },
+            "Volatile": {
+                "score": 3.138,
+                "return_pct": 52.27,
+                "max_dd_pct": -16.66
+            }
+        },
+        "mode_qualified": true
     },
     "PLTR": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 25,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 5,
+                "long": 30
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 250
+            },
+            "Volatile": {
+                "short": 20,
+                "long": 50
+            }
+        },
+        "best_mode": "Long_Term",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 3.0667,
+                "return_pct": 95.3,
+                "max_dd_pct": -31.07
+            },
+            "Swing": {
+                "score": 12.9747,
+                "return_pct": 502.25,
+                "max_dd_pct": -38.71
+            },
+            "Long_Term": {
+                "score": 21.9319,
+                "return_pct": 890.69,
+                "max_dd_pct": -40.61
+            },
+            "Volatile": {
+                "score": 6.5783,
+                "return_pct": 264.83,
+                "max_dd_pct": -40.26
+            }
+        },
+        "mode_qualified": true
     },
     "ORCL": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 5,
         "best_long_window": 30,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 15,
+                "long": 60
+            },
+            "Aggressive": {
+                "short": 5,
+                "long": 40
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 200
+            },
+            "Volatile": {
+                "short": 10,
+                "long": 35
+            }
+        },
+        "best_mode": "Aggressive",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 2.5789,
+                "return_pct": 56.58,
+                "max_dd_pct": -21.94
+            },
+            "Swing": {
+                "score": -0.3042,
+                "return_pct": -12.51,
+                "max_dd_pct": -41.11
+            },
+            "Long_Term": {
+                "score": 0.21,
+                "return_pct": 9.56,
+                "max_dd_pct": -45.55
+            },
+            "Volatile": {
+                "score": 0.6307,
+                "return_pct": 8.82,
+                "max_dd_pct": -13.99
+            }
+        },
+        "mode_qualified": true
     },
     "CRWV": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 5,
         "best_long_window": 10,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 20,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 12,
+                "long": 25
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 200
+            },
+            "Volatile": {
+                "short": 10,
+                "long": 35
+            }
+        },
+        "best_mode": "Aggressive",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 1.4675,
+                "return_pct": 40.89,
+                "max_dd_pct": -27.87
+            },
+            "Swing": {
+                "score": -0.8663,
+                "return_pct": -52.86,
+                "max_dd_pct": -61.02
+            },
+            "Long_Term": {
+                "score": -0.1892,
+                "return_pct": -3.59,
+                "max_dd_pct": -18.99
+            },
+            "Volatile": {
+                "score": 0.7382,
+                "return_pct": 18.03,
+                "max_dd_pct": -24.43
+            }
+        },
+        "mode_qualified": false
     },
     "JPM": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 250,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 25,
+                "long": 60
+            },
+            "Aggressive": {
+                "short": 5,
+                "long": 25
+            },
+            "Long_Term": {
+                "short": 60,
+                "long": 150
+            },
+            "Volatile": {
+                "short": 15,
+                "long": 40
+            }
+        },
+        "best_mode": "Long_Term",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 1.1153,
+                "return_pct": 17.08,
+                "max_dd_pct": -15.32
+            },
+            "Swing": {
+                "score": 3.6394,
+                "return_pct": 71.19,
+                "max_dd_pct": -19.56
+            },
+            "Long_Term": {
+                "score": 3.6571,
+                "return_pct": 89.32,
+                "max_dd_pct": -24.42
+            },
+            "Volatile": {
+                "score": 1.377,
+                "return_pct": 16.49,
+                "max_dd_pct": -11.97
+            }
+        },
+        "mode_qualified": true
     },
     "WMT": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 5,
         "best_long_window": 150,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 15,
+                "long": 60
+            },
+            "Aggressive": {
+                "short": 5,
+                "long": 25
+            },
+            "Long_Term": {
+                "short": 60,
+                "long": 150
+            },
+            "Volatile": {
+                "short": 15,
+                "long": 50
+            }
+        },
+        "best_mode": "Long_Term",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 3.5129,
+                "return_pct": 36.83,
+                "max_dd_pct": -10.48
+            },
+            "Swing": {
+                "score": 3.5266,
+                "return_pct": 73.08,
+                "max_dd_pct": -20.72
+            },
+            "Long_Term": {
+                "score": 3.8126,
+                "return_pct": 83.6,
+                "max_dd_pct": -21.93
+            },
+            "Volatile": {
+                "score": 1.7869,
+                "return_pct": 33.4,
+                "max_dd_pct": -18.69
+            }
+        },
+        "mode_qualified": false
     },
     "LLY": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 10,
         "best_long_window": 50,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 25,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 10,
+                "long": 25
+            },
+            "Long_Term": {
+                "short": 50,
+                "long": 200
+            },
+            "Volatile": {
+                "short": 20,
+                "long": 35
+            }
+        },
+        "best_mode": "Volatile",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 1.698,
+                "return_pct": 46.08,
+                "max_dd_pct": -27.14
+            },
+            "Swing": {
+                "score": 1.7796,
+                "return_pct": 54.23,
+                "max_dd_pct": -30.47
+            },
+            "Long_Term": {
+                "score": 2.6322,
+                "return_pct": 79.14,
+                "max_dd_pct": -30.07
+            },
+            "Volatile": {
+                "score": 5.116,
+                "return_pct": 58.87,
+                "max_dd_pct": -11.51
+            }
+        },
+        "mode_qualified": true
     },
     "AVGO": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 250,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 15,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 12,
+                "long": 40
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 250
+            },
+            "Volatile": {
+                "short": 15,
+                "long": 40
+            }
+        },
+        "best_mode": "Volatile",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 2.1139,
+                "return_pct": 62.3,
+                "max_dd_pct": -29.47
+            },
+            "Swing": {
+                "score": 5.7714,
+                "return_pct": 136.76,
+                "max_dd_pct": -23.7
+            },
+            "Long_Term": {
+                "score": 8.6364,
+                "return_pct": 355.38,
+                "max_dd_pct": -41.15
+            },
+            "Volatile": {
+                "score": 9.408,
+                "return_pct": 200.17,
+                "max_dd_pct": -21.28
+            }
+        },
+        "mode_qualified": true
     },
     "MU": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 20,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 12,
+                "long": 30
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 250
+            },
+            "Volatile": {
+                "short": 20,
+                "long": 40
+            }
+        },
+        "best_mode": "Long_Term",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 1.506,
+                "return_pct": 58.33,
+                "max_dd_pct": -38.73
+            },
+            "Swing": {
+                "score": 6.6767,
+                "return_pct": 248.16,
+                "max_dd_pct": -37.17
+            },
+            "Long_Term": {
+                "score": 15.0559,
+                "return_pct": 588.62,
+                "max_dd_pct": -39.1
+            },
+            "Volatile": {
+                "score": 5.7219,
+                "return_pct": 158.82,
+                "max_dd_pct": -27.76
+            }
+        },
+        "mode_qualified": true
     },
     "V": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 20,
+                "long": 50
+            },
+            "Aggressive": {
+                "short": 12,
+                "long": 20
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 200
+            },
+            "Volatile": {
+                "short": 15,
+                "long": 50
+            }
+        },
+        "best_mode": "Volatile",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 1.491,
+                "return_pct": 23.97,
+                "max_dd_pct": -16.08
+            },
+            "Swing": {
+                "score": 2.9281,
+                "return_pct": 35.57,
+                "max_dd_pct": -12.15
+            },
+            "Long_Term": {
+                "score": 1.9427,
+                "return_pct": 29.16,
+                "max_dd_pct": -15.01
+            },
+            "Volatile": {
+                "score": 4.6809,
+                "return_pct": 44.08,
+                "max_dd_pct": -9.42
+            }
+        },
+        "mode_qualified": true
     },
     "COST": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 10,
         "best_long_window": 100,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 25,
+                "long": 60
+            },
+            "Aggressive": {
+                "short": 5,
+                "long": 20
+            },
+            "Long_Term": {
+                "short": 50,
+                "long": 200
+            },
+            "Volatile": {
+                "short": 20,
+                "long": 50
+            }
+        },
+        "best_mode": "Long_Term",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 3.7308,
+                "return_pct": 41.99,
+                "max_dd_pct": -11.26
+            },
+            "Swing": {
+                "score": 1.3809,
+                "return_pct": 25.25,
+                "max_dd_pct": -18.29
+            },
+            "Long_Term": {
+                "score": 5.5053,
+                "return_pct": 95.21,
+                "max_dd_pct": -17.29
+            },
+            "Volatile": {
+                "score": 0.5035,
+                "return_pct": 12.62,
+                "max_dd_pct": -25.06
+            }
+        },
+        "mode_qualified": true
     },
     "CRWD": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 10,
         "best_long_window": 30,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 25,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 8,
+                "long": 40
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 150
+            },
+            "Volatile": {
+                "short": 10,
+                "long": 35
+            }
+        },
+        "best_mode": "Aggressive",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 9.8675,
+                "return_pct": 234.25,
+                "max_dd_pct": -23.74
+            },
+            "Swing": {
+                "score": 5.7192,
+                "return_pct": 202.63,
+                "max_dd_pct": -35.43
+            },
+            "Long_Term": {
+                "score": 1.0821,
+                "return_pct": 23.5,
+                "max_dd_pct": -21.72
+            },
+            "Volatile": {
+                "score": 1.2749,
+                "return_pct": 33.33,
+                "max_dd_pct": -26.14
+            }
+        },
+        "mode_qualified": true
     },
     "AIQ": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 5,
         "best_long_window": 10,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 25,
+                "long": 50
+            },
+            "Aggressive": {
+                "short": 8,
+                "long": 30
+            },
+            "Long_Term": {
+                "short": 40,
+                "long": 200
+            },
+            "Volatile": {
+                "short": 10,
+                "long": 35
+            }
+        },
+        "best_mode": "Volatile",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 2.1856,
+                "return_pct": 25.65,
+                "max_dd_pct": -11.74
+            },
+            "Swing": {
+                "score": 1.7083,
+                "return_pct": 24.6,
+                "max_dd_pct": -14.4
+            },
+            "Long_Term": {
+                "score": 0.7326,
+                "return_pct": 14.79,
+                "max_dd_pct": -20.19
+            },
+            "Volatile": {
+                "score": 3.7857,
+                "return_pct": 38.43,
+                "max_dd_pct": -10.15
+            }
+        },
+        "mode_qualified": true
     },
     "QQQ": {
-        "last_optimized": "2026-05-01",
+        "last_optimized": "2026-07-29",
         "strategy": "Combo",
         "best_short_window": 50,
         "best_long_window": 350,
-        "rsi_period": 14
+        "rsi_period": 14,
+        "best_windows": {
+            "Swing": {
+                "short": 15,
+                "long": 40
+            },
+            "Aggressive": {
+                "short": 8,
+                "long": 30
+            },
+            "Long_Term": {
+                "short": 60,
+                "long": 250
+            },
+            "Volatile": {
+                "short": 15,
+                "long": 40
+            }
+        },
+        "best_mode": "Aggressive",
+        "mode_scores": {
+            "Aggressive": {
+                "score": 3.7521,
+                "return_pct": 33.46,
+                "max_dd_pct": -8.92
+            },
+            "Swing": {
+                "score": 1.0747,
+                "return_pct": 13.1,
+                "max_dd_pct": -12.19
+            },
+            "Long_Term": {
+                "score": 2.1776,
+                "return_pct": 49.58,
+                "max_dd_pct": -22.77
+            },
+            "Volatile": {
+                "score": 0.4816,
+                "return_pct": 5.55,
+                "max_dd_pct": -11.52
+            }
+        },
+        "mode_qualified": true
     }
 }

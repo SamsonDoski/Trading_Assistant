@@ -65,3 +65,12 @@ MIN_FRACTIONAL_NOTIONAL_USD = 1.00
 # "V4_Legacy" == deployed V4.0 behavior (legacy free-searched per-ticker windows)
 # — the safe rollback value. NOTE "Swing" is a preset with its own grid, NOT V4.0.
 ACTIVE_MODE = os.getenv("ACTIVE_MODE", "V4_Legacy")
+
+# -----------------
+# Brokerage Endpoint
+# -----------------
+# Which Alpaca environment the ALPACA_API_KEY/SECRET belong to.
+# Defaults to PAPER: going live must be an explicit, deliberate opt-in
+# (set ALPACA_PAPER=false), never something a missing variable can cause.
+# Paper and live keys are not interchangeable — a mismatch fails to authenticate.
+ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").strip().lower() not in ("false", "0", "no")

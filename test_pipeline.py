@@ -156,6 +156,18 @@ class TestConfig:
         assert config.SHORT_MA < config.LONG_MA
         assert config.RESULTS_DIR
 
+    def test_alpaca_paper_defaults_true_and_needs_explicit_optout(self, monkeypatch):
+        # Going live must require an explicit "false" — never a missing/garbled var.
+        import importlib
+        import config as cfg
+        for value, expected in (("false", False), ("FALSE", False), ("0", False),
+                                ("no", False), ("true", True), ("", True),
+                                ("anything-else", True)):
+            monkeypatch.setenv("ALPACA_PAPER", value)
+            assert importlib.reload(cfg).ALPACA_PAPER is expected, value
+        monkeypatch.delenv("ALPACA_PAPER", raising=False)
+        assert importlib.reload(cfg).ALPACA_PAPER is True      # unset -> paper
+
 
 # ================================================================ NEW: allocator (V4.1 equal-weight + fractional)
 class TestAllocator:
@@ -324,9 +336,9 @@ class TestExecutioner:
             def __init__(self, sym, coid):
                 self.symbol, self.client_order_id = sym, coid
         class FakeClosed:
-            def __init__(self, sym, qty, price, coid=""):
+            def __init__(self, sym, qty, price, coid="", order_type="trailing_stop"):
                 self.symbol, self.filled_qty, self.filled_avg_price = sym, qty, price
-                self.order_type, self.status = "trailing_stop", "filled"
+                self.order_type, self.status = order_type, "filled"
                 self.client_order_id = coid
         class FakeAccount:
             def __init__(self): self.non_marginable_buying_power = buying_power
@@ -503,6 +515,60 @@ class TestExecutioner:
         assert pl_pct == pytest.approx(2.0)
         assert pl_usd == pytest.approx(144.0)
 
+    # ---- fractional stop-outs are plain `stop` orders, not trailing_stop ----
+    def test_fractional_stopout_is_reported_with_pl(self, monkeypatch):
+        import engine.executioner as em
+        # fstop-{ticker}-{stop}-{entry}-{ts}: bought at 28.39, stopped out at 26.69.
+        monkeypatch.setattr(em, "TradingClient", self._client_cls(
+            {}, closed_stopouts=[("SMCI", "0.9536", "26.69",
+                                  "fstop-SMCI-26.6900-28.3900-1700000000", "stop")]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        [(sym, qty, price, pl_pct, pl_usd)] = ex.get_recent_stopouts(hours=24)
+        assert sym == "SMCI"
+        assert pl_pct == pytest.approx(-5.988, abs=0.01)      # 28.39 -> 26.69
+        assert pl_usd == pytest.approx(-1.621, abs=0.01)      # x 0.9536 shares
+
+    def test_legacy_fractional_stopout_reported_without_pl(self, monkeypatch):
+        import engine.executioner as em
+        # Legacy 4-part id carries the stop level but no entry price.
+        monkeypatch.setattr(em, "TradingClient", self._client_cls(
+            {}, closed_stopouts=[("SMCI", "0.5", "26.69",
+                                  "fstop-SMCI-26.6900-1700000000", "stop")]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        [(sym, qty, price, pl_pct, pl_usd)] = ex.get_recent_stopouts(hours=24)
+        assert sym == "SMCI" and pl_pct is None and pl_usd is None
+
+    def test_foreign_stop_order_is_not_reported(self, monkeypatch):
+        import engine.executioner as em
+        # A stop the bot didn't place (no fstop- id) must not be claimed as ours.
+        monkeypatch.setattr(em, "TradingClient", self._client_cls(
+            {}, closed_stopouts=[("SMCI", "1", "26.69", "manual-order-123", "stop")]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        assert ex.get_recent_stopouts(hours=24) == []
+
+    def test_fractional_stop_id_carries_stop_and_entry(self, monkeypatch):
+        import engine.executioner as em
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.02", "0.5")},
+                                             current_prices={"AAPL": "100.0"}))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        ex.ensure_protective_stop("AAPL", 15.0)
+        coid = ex.api.submitted[0].client_order_id
+        stop_level, entry_price = ex._parse_fractional_stop_id(coid)
+        assert stop_level == pytest.approx(85.0)     # entry 100 * (1 - 0.15)
+        assert entry_price == pytest.approx(100.0)   # avg_entry_price, for later P/L
+
+    def test_ratchet_still_reads_legacy_ids(self, monkeypatch):
+        import engine.executioner as em
+        # A 4-part id from before entry-price tagging must still floor the ratchet.
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.02", "0.5")},
+                                             current_prices={"AAPL": "100.0"},
+                                             all_orders=[("AAPL", "fstop-AAPL-90.0000-1700000000")]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        ex.ensure_protective_stop("AAPL", 15.0)
+        assert float(ex.api.submitted[0].stop_price) == pytest.approx(90.0)
+
     def test_position_fetch_failure_raises(self, monkeypatch):
         import engine.executioner as em
         class BoomClient:
@@ -587,7 +653,9 @@ class TestControllerOrchestration:
         monkeypatch.setattr(lc.time, "sleep", lambda *a, **k: None)
         monkeypatch.setattr(lc, "ACTIVE_MODE", mode)
         def make_exec(*a, **k):
-            holder["exec"] = FakeExec(); return holder["exec"]
+            holder["exec"] = FakeExec()
+            holder["exec_kwargs"] = k          # so tests can assert the paper flag
+            return holder["exec"]
         monkeypatch.setattr(lc, "AlpacaExecutioner", make_exec)
         return lc, holder
 
@@ -596,6 +664,19 @@ class TestControllerOrchestration:
             "current_price": 200.0, "current_rsi": 40.0}, held=False)
         lc.run_live_pipeline()
         assert h["exec"].buys == [("AAPL", 42)] and h["exec"].sells == []
+
+    def test_alpaca_paper_flag_reaches_the_executioner(self, monkeypatch):
+        signals = {"latest_signal": 1, "previous_signal": 1,
+                   "current_price": 200.0, "current_rsi": 50.0}
+        lc, h = self._wire(monkeypatch, signals, held=True)
+        monkeypatch.setattr(lc, "ALPACA_PAPER", False)
+        lc.run_live_pipeline()
+        assert h["exec_kwargs"]["paper"] is False      # live endpoint requested
+
+        lc, h = self._wire(monkeypatch, signals, held=True)
+        monkeypatch.setattr(lc, "ALPACA_PAPER", True)
+        lc.run_live_pipeline()
+        assert h["exec_kwargs"]["paper"] is True
 
     def test_sell_when_trend_dies(self, monkeypatch):
         lc, h = self._wire(monkeypatch, {"latest_signal": 0, "previous_signal": 1,

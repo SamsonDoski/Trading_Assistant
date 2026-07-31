@@ -194,11 +194,12 @@ class AlpacaExecutioner:
             candidate_stop_price = current_price * (1 - stop_fraction)
             protected_stop_price = max(previous_protected_stop_price, candidate_stop_price)
 
-        `protected_stop_price` is carried on the order's client_order_id and
-        recovered next run (same trick the trailing stop uses for entry price),
-        so no external state store is needed. DAY stops expire at close, hence
-        the re-placement each run — and hence no overnight coverage, which the
-        'already past stop' branch below backstops on the next run."""
+        Both `protected_stop_price` AND the entry price are carried on the order's
+        client_order_id and recovered next run (same trick the trailing stop uses),
+        so no external state store is needed — the stop level drives the ratchet,
+        the entry price lets a fill be reported with realized P/L. DAY stops expire
+        at close, hence the re-placement each run — and hence no overnight coverage,
+        which the 'already past stop' branch below backstops on the next run."""
         pos = self._positions.get(ticker)
         try:
             current_price = float(pos.current_price)
@@ -226,7 +227,8 @@ class AlpacaExecutioner:
                 side=OrderSide.SELL,
                 time_in_force=TimeInForce.DAY,
                 stop_price=stop_price,
-                client_order_id=f"fstop-{ticker}-{protected_stop_price:.4f}-{int(time.time())}",
+                client_order_id=(f"fstop-{ticker}-{protected_stop_price:.4f}"
+                                 f"-{entry_price:.4f}-{int(time.time())}"),
             )
             self.api.submit_order(order_data=order)
             self._open_order_symbols.add(ticker)
@@ -238,6 +240,29 @@ class AlpacaExecutioner:
             # — degrade to the next-run backstop rather than crash the pass.
             print(f"❌ Fractional stop rejected for {ticker}: {e} — relying on run-time check.")
             return None
+
+    @staticmethod
+    def _parse_fractional_stop_id(client_order_id):
+        """(protected_stop_price, entry_price) from one of our fractional-stop ids.
+
+        Current format: fstop-{ticker}-{stop}-{entry}-{timestamp}
+        Legacy format:  fstop-{ticker}-{stop}-{timestamp}  -> entry is None.
+        Returns (None, None) for anything that isn't ours or won't parse, so a
+        manually placed stop is never mistaken for a bot stop."""
+        parts = str(client_order_id or "").split("-")
+        if len(parts) < 4 or parts[0] != "fstop":
+            return None, None
+        try:
+            stop_level = float(parts[2])
+        except ValueError:
+            return None, None
+        entry_price = None
+        if len(parts) >= 5:
+            try:
+                entry_price = float(parts[3])
+            except ValueError:
+                entry_price = None
+        return stop_level, entry_price
 
     def _recover_protected_stop(self, ticker):
         """Highest `protected_stop_price` previously committed for a fractional
@@ -255,13 +280,11 @@ class AlpacaExecutioner:
         prefix = f"fstop-{ticker}-"
         for o in orders:
             coid = str(getattr(o, "client_order_id", "") or "")
-            if coid.startswith(prefix):
-                try:
-                    level = float(coid.rsplit("-", 2)[1])
-                    if best is None or level > best:
-                        best = level
-                except (IndexError, ValueError):
-                    pass
+            if not coid.startswith(prefix):
+                continue
+            level, _ = self._parse_fractional_stop_id(coid)
+            if level is not None and (best is None or level > best):
+                best = level
         return best
 
     def liquidate_position(self, ticker):
@@ -286,9 +309,15 @@ class AlpacaExecutioner:
             print(f"⚠️ Could not cancel open orders for {ticker}: {e}")
 
     def get_recent_stopouts(self, hours=24):
-        """Filled trailing-stop SELL orders in the last `hours`. Returns
-        [(symbol, qty, fill_price, pl_pct, pl_usd)] — P/L fields are None for
-        stops placed before we started tagging orders with the entry price."""
+        """Filled protective-stop SELL orders in the last `hours`. Returns
+        [(symbol, qty, fill_price, pl_pct, pl_usd)].
+
+        Covers BOTH stop flavors, which have different broker order types:
+          * whole-share  -> GTC trailing_stop, entry price on a `tstop-` id
+          * fractional   -> DAY plain stop,   entry price on an `fstop-` id
+        Matching fractional stops by their client_order_id rather than by order
+        type keeps a manually placed stop from being reported as a bot exit.
+        P/L is None for legacy ids placed before the entry price was tagged on."""
         since = datetime.now(timezone.utc) - timedelta(hours=hours)
         try:
             req = GetOrdersRequest(status=QueryOrderStatus.CLOSED, after=since, limit=200)
@@ -296,20 +325,36 @@ class AlpacaExecutioner:
         except Exception as e:
             print(f"❌ Failed to fetch recent orders: {e}")
             return []
+
         stopouts = []
         for o in orders:
-            otype = str(getattr(o, "order_type", "") or "").lower()
+            order_type = str(getattr(o, "order_type", "") or "").lower()
             status = str(o.status).lower()
-            if "trailing_stop" in otype and "filled" in status:
-                pl_pct = pl_usd = None
-                coid = str(getattr(o, "client_order_id", "") or "")
-                if coid.startswith("tstop-"):
-                    try:
-                        entry = float(coid.rsplit("-", 2)[1])
-                        fill = float(o.filled_avg_price)
-                        pl_pct = (fill - entry) / entry * 100
-                        pl_usd = (fill - entry) * float(o.filled_qty)
-                    except (IndexError, ValueError):
-                        pass  # unexpected id format — report without P/L
-                stopouts.append((o.symbol, o.filled_qty, o.filled_avg_price, pl_pct, pl_usd))
+            if "filled" not in status:
+                continue
+            coid = str(getattr(o, "client_order_id", "") or "")
+            is_trailing_stop = "trailing_stop" in order_type
+            is_fractional_stop = coid.startswith("fstop-")
+            if not (is_trailing_stop or is_fractional_stop):
+                continue
+
+            entry_price = None
+            if is_fractional_stop:
+                _, entry_price = self._parse_fractional_stop_id(coid)
+            elif coid.startswith("tstop-"):
+                try:
+                    entry_price = float(coid.rsplit("-", 2)[1])
+                except (IndexError, ValueError):
+                    entry_price = None
+
+            pl_pct = pl_usd = None
+            if entry_price:
+                try:
+                    fill_price = float(o.filled_avg_price)
+                    pl_pct = (fill_price - entry_price) / entry_price * 100
+                    pl_usd = (fill_price - entry_price) * float(o.filled_qty)
+                except (TypeError, ValueError):
+                    pl_pct = pl_usd = None      # unusable fill data — report without P/L
+
+            stopouts.append((o.symbol, o.filled_qty, o.filled_avg_price, pl_pct, pl_usd))
         return stopouts

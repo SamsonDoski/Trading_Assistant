@@ -84,7 +84,7 @@ def run_live_pipeline():
         if pl_pct is not None:
             so_msg += f" (P/L: {pl_pct:+.2f}% / ${pl_usd:+,.2f})"
         else:
-            so_msg += " (trailing stop filled)"
+            so_msg += " (stop filled)"      # covers both trailing and fractional DAY stops
         print(so_msg)
         notifier.send_message(so_msg)
 

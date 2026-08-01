@@ -45,17 +45,28 @@ SENTIMENT_MODE = "live"
 CASH_RESERVE_PCT = 0.15   # fraction of buying power always held back as cash
 
 # -----------------
-# Position Sizing (V4.1 — equal-weight, small-account aware)
+# Position Sizing (equal-weight, small-account aware)
 # -----------------
 # Deployable capital is split equally across every watchlist name NOT currently
 # held:  base_allocation_usd = usable_budget_usd / not_held_count.
 # The sentiment conviction_multiplier then scales that slice. There is NO flat
 # cap — this auto-scales from a $400 account to a $1M account. When a slice is
 # worth less than one whole share, the allocator falls back to a fractional buy.
-ALLOW_FRACTIONAL = True
+# (Whether fractional is allowed is a per-mode setting: ModeSettings.allow_fractional.)
 
 # Skip a fractional buy whose dollar size is below this — avoids buying dust.
 MIN_FRACTIONAL_NOTIONAL_USD = 1.00
+
+# -----------------
+# Profile Freshness
+# -----------------
+# Profiles older than PROFILE_STALE_DAYS are skipped entirely by the controller.
+# Because the whole watchlist tends to be re-optimized in one batch, every ticker
+# reaches that line on the SAME day — which once left the bot silently doing
+# nothing for a full session. Warn this many days ahead so re-optimization can be
+# scheduled instead of discovered.
+PROFILE_STALE_DAYS = 90
+PROFILE_STALE_WARNING_DAYS = 2
 
 # -----------------
 # Active Trading Mode (V5.0)
@@ -74,3 +85,19 @@ ACTIVE_MODE = os.getenv("ACTIVE_MODE", "V4_Legacy")
 # (set ALPACA_PAPER=false), never something a missing variable can cause.
 # Paper and live keys are not interchangeable — a mismatch fails to authenticate.
 ALPACA_PAPER = os.getenv("ALPACA_PAPER", "true").strip().lower() not in ("false", "0", "no")
+
+# -----------------
+# Kill Switch
+# -----------------
+# Manual freeze on OPENING new positions. Set TRADING_HALTED=true to stop the bot
+# buying, effective on the next run, with no redeploy.
+#
+# This is deliberately surgical: sells, stop attachment and stop-out reporting all
+# KEEP RUNNING while it is on. Disabling the EventBridge schedules would stop those
+# too — i.e. it would switch off your safety systems in the exact situation where
+# you want them most. Halting buys is the correct emergency action.
+#
+# Defaults to NOT halted: a missing or garbled variable must never silently freeze
+# trading. When it IS on, every run announces it loudly so it can't be forgotten.
+# NOTE: with parallel accounts this must be set on EACH Lambda function separately.
+TRADING_HALTED = os.getenv("TRADING_HALTED", "false").strip().lower() in ("true", "1", "yes", "on")

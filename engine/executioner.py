@@ -92,51 +92,45 @@ class AlpacaExecutioner:
         pos = self._positions.get(ticker)
         return float(pos.qty) if pos else 0.0
 
-    def execute_market_buy(self, ticker, qty):
-        """Submits a whole-share market buy for the qty the allocator sized."""
-        if qty is None or qty <= 0:
+    def execute_market_buy(self, ticker, qty=None, notional=None):
+        """Submit a market buy, sized EITHER by share count or by dollars.
+
+        qty      — whole-share buys, where the share count is what matters.
+        notional — dollar buys: the broker computes the (fractional) quantity at
+                   the real fill price, so you spend exactly the amount the
+                   allocator decided regardless of how the price moved since the
+                   last bar. Only valid for fractionable symbols.
+
+        Alpaca accepts one or the other, never both."""
+        if (qty is None) == (notional is None):
+            print(f"❌ BUY for {ticker} needs exactly one of qty or notional.")
+            return
+        if qty is not None and qty <= 0:
+            return
+        if notional is not None and notional <= 0:
             return
         try:
-            order = MarketOrderRequest(
-                symbol=ticker,
-                qty=qty,
-                side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY,
-            )
+            if notional is not None:
+                order = MarketOrderRequest(
+                    symbol=ticker,
+                    notional=round(float(notional), 2),   # Alpaca takes cents
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.DAY,
+                )
+                description = f"${float(notional):,.2f} of"
+            else:
+                order = MarketOrderRequest(
+                    symbol=ticker,
+                    qty=qty,
+                    side=OrderSide.BUY,
+                    time_in_force=TimeInForce.DAY,
+                )
+                description = f"{qty} shares of"
             self.api.submit_order(order_data=order)
-            print(f"✅ Executed BUY for {qty} shares of {ticker}")
+            print(f"✅ Executed BUY for {description} {ticker}")
         except Exception as e:
             print(f"❌ Failed to execute BUY for {ticker}: {e}")
 
-
-    def days_since_last_buy(self, ticker, lookback_days=90):
-        """Days since the most recent FILLED buy on this symbol.
-        `inf` = no buy found in the lookback (cooldown trivially satisfied).
-        `None` = history unreadable — caller must treat that as NOT satisfied,
-        so an unverifiable cooldown can never authorize an extra entry."""
-        now = datetime.now(timezone.utc)
-        try:
-            req = GetOrdersRequest(
-                status=QueryOrderStatus.CLOSED,
-                after=now - timedelta(days=lookback_days),
-                symbols=[ticker],
-                limit=200,
-            )
-            orders = self.api.get_orders(filter=req)
-        except Exception as e:
-            print(f"⚠️ Could not read buy history for {ticker}: {e}")
-            return None
-        newest = None
-        for o in orders:
-            side = str(getattr(o, "side", "") or "").lower()
-            status = str(getattr(o, "status", "") or "").lower()
-            if "buy" in side and "filled" in status:
-                ts = getattr(o, "filled_at", None) or getattr(o, "submitted_at", None)
-                if ts is not None and (newest is None or ts > newest):
-                    newest = ts
-        if newest is None:
-            return float("inf")
-        return (now - newest).total_seconds() / 86400.0
 
     def ensure_protective_stop(self, ticker, stop_percent):
         """Attach the right kind of broker-side stop to a held position, or sell

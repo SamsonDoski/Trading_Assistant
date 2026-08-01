@@ -3,7 +3,7 @@ from datetime import datetime
 
 import pandas as pd
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
+from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame
 from alpaca.data.enums import Adjustment, DataFeed
 
@@ -18,6 +18,25 @@ def _get_client():
             os.getenv("ALPACA_API_KEY"), os.getenv("ALPACA_SECRET_KEY")
         )
     return _client
+
+
+def fetch_latest_price(ticker):
+    """Last traded price right now, or None if unavailable.
+
+    Sizing off the last COMPLETED daily bar means a gap between yesterday's close
+    and today's fill makes you buy proportionally more or less than the allocator
+    intended. This closes most of that gap. Returns None rather than raising, so
+    a quote failure degrades to the daily-bar price instead of blocking a trade.
+    """
+    try:
+        request = StockLatestTradeRequest(symbol_or_symbols=ticker, feed=DataFeed.IEX)
+        trades = _get_client().get_stock_latest_trade(request)
+        trade = trades.get(ticker) if hasattr(trades, "get") else None
+        price = float(getattr(trade, "price", 0.0) or 0.0)
+        return price if price > 0 else None
+    except Exception as e:
+        print(f"⚠️ Latest-price lookup failed for {ticker}: {e}")
+        return None
 
 
 def fetch_data(ticker, start="2016-01-01", end=None, force_download=False):

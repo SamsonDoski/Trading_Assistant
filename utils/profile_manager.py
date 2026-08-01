@@ -1,4 +1,5 @@
 import json
+import math
 import os
 from datetime import datetime, timedelta
 
@@ -17,6 +18,38 @@ def save_profiles(data):
     with open(PROFILE_FILE, "w") as file:
         json.dump(data, file, indent=4)
     print("Stock profiles updated successfully.")
+
+def days_until_stale(profile, days_limit=90):
+    """Days left before one profile expires. Negative once it already has,
+    None if it carries no usable last_optimized date."""
+    last_opt_str = (profile or {}).get("last_optimized")
+    if not last_opt_str:
+        return None
+    try:
+        last_opt_date = datetime.strptime(last_opt_str, "%Y-%m-%d")
+    except ValueError:
+        return None
+    remaining = last_opt_date + timedelta(days=days_limit) - datetime.now()
+    # Round UP: dates parse to midnight, so a profile expiring in a few hours
+    # would otherwise report "0 days left" when "1" is what a human means.
+    return math.ceil(remaining.total_seconds() / 86400)
+
+
+def expiring_profiles(profiles, days_limit=90, warn_within_days=2):
+    """[(ticker, days_left)] for profiles about to expire, soonest first.
+
+    Already-expired ones are excluded — the controller reports those per ticker
+    as it skips them. This is the ADVANCE warning: the whole watchlist is
+    usually optimized in one batch, so it all goes stale on the same day and the
+    bot stops trading entirely. Takes the loaded dict rather than re-reading the
+    file per ticker."""
+    upcoming = []
+    for ticker, profile in (profiles or {}).items():
+        days_left = days_until_stale(profile, days_limit)
+        if days_left is not None and 0 <= days_left <= warn_within_days:
+            upcoming.append((ticker, days_left))
+    return sorted(upcoming, key=lambda pair: pair[1])
+
 
 def is_stale(ticker, days_limit=90):
     """

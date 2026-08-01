@@ -1,3 +1,4 @@
+import html
 import os
 from datetime import datetime, timedelta, timezone
 
@@ -104,7 +105,9 @@ class SentimentAnalyzer:
             items = news.data.get("news", []) if hasattr(news, "data") else []
             headlines = []
             for item in items:
-                headline = (getattr(item, "headline", "") or "").strip()
+                # The feed is HTML-encoded, so raw text arrives as "AMD&#39;s".
+                # Unescape before it reaches the model or the Discord digest.
+                headline = html.unescape(getattr(item, "headline", "") or "").strip()
                 if not headline:
                     continue
 
@@ -112,7 +115,7 @@ class SentimentAnalyzer:
                 # context. Collapse whitespace, cap the length so a long body
                 # can't blow up the prompt, and drop it if it just echoes the
                 # headline (Benzinga sometimes duplicates).
-                summary = (getattr(item, "summary", "") or "").strip()
+                summary = html.unescape(getattr(item, "summary", "") or "").strip()
                 if summary:
                     summary = " ".join(summary.split())
                     if len(summary) > summary_chars:

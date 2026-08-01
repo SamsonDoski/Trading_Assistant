@@ -697,7 +697,7 @@ class TestControllerOrchestration:
         holder = {}
         monkeypatch.setattr(lc, "load_profiles", lambda: {
             "AAPL": {"best_short_window": 5, "best_long_window": 20, "rsi_period": 14}})
-        monkeypatch.setattr(lc, "is_stale", lambda t: False)
+        monkeypatch.setattr(lc, "is_stale", lambda t, days_limit=None: False)
         monkeypatch.setattr(lc, "StrategyScanner", FakeScanner)
         monkeypatch.setattr(lc, "PortfolioAllocator", FakeAllocator)
         monkeypatch.setattr(lc, "DiscordNotifier", FakeNotifier)
@@ -900,6 +900,29 @@ class TestProfileManager:
                          "best_short_window": 5, "best_long_window": 20}}
         pm.save_profiles(data)
         assert pm.load_profiles() == data
+
+    def test_expiring_profiles_warns_before_the_cliff(self):
+        import utils.profile_manager as pm
+        def days_ago(n):
+            return (datetime.now() - timedelta(days=n)).strftime("%Y-%m-%d")
+        profiles = {
+            "SOON": {"last_optimized": days_ago(89)},    # 1 day left
+            "TODAY": {"last_optimized": days_ago(88)},   # 2 days left
+            "FINE": {"last_optimized": days_ago(10)},    # 80 days left
+            "GONE": {"last_optimized": days_ago(120)},   # already stale
+            "BLANK": {},                                 # no date at all
+        }
+        expiring = pm.expiring_profiles(profiles, days_limit=90, warn_within_days=2)
+        assert [t for t, _ in expiring] == ["SOON", "TODAY"]   # soonest first
+        assert dict(expiring)["SOON"] == 1
+        # Already-stale and undated profiles are NOT advance warnings.
+        assert "GONE" not in dict(expiring) and "BLANK" not in dict(expiring)
+
+    def test_days_until_stale_handles_bad_dates(self):
+        import utils.profile_manager as pm
+        assert pm.days_until_stale({}) is None
+        assert pm.days_until_stale({"last_optimized": "not-a-date"}) is None
+        assert pm.days_until_stale(None) is None
 
     def test_is_stale_logic(self, monkeypatch, tmp_path):
         import utils.profile_manager as pm
@@ -1207,6 +1230,24 @@ class TestSentiment:
         [h] = a.fetch_headlines("META")
         assert "Meta beats on earnings" in h
         assert "ad growth" in h          # the summary reached the prompt string
+
+    def test_html_entities_are_unescaped(self):
+        from engine.sentiment import SentimentAnalyzer
+        from datetime import datetime, timezone
+        a = SentimentAnalyzer()
+        class Item:
+            headline = "AMD&#39;s AI pivot &amp; the chip selloff"
+            summary = "Analysts said &quot;buy&quot; despite the drop."
+            created_at = datetime.now(timezone.utc)
+        class NewsSet:
+            data = {"news": [Item()]}
+        class Client:
+            def get_news(self, req): return NewsSet()
+        a._news_client = Client()
+        [h] = a.fetch_headlines("AMD")
+        assert "AMD's AI pivot & the chip selloff" in h
+        assert '"buy"' in h
+        assert "&#39;" not in h and "&amp;" not in h and "&quot;" not in h
 
     def test_long_summary_is_truncated(self):
         from engine.sentiment import SentimentAnalyzer

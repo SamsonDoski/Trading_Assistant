@@ -3,7 +3,7 @@ import time
 from datetime import datetime, timezone
 from dotenv import load_dotenv
 
-from utils.profile_manager import load_profiles, is_stale
+from utils.profile_manager import load_profiles, is_stale, expiring_profiles
 from utils.notifier import DiscordNotifier
 from utils.alpaca_data import fetch_latest_price
 from engine.scanner import StrategyScanner
@@ -11,7 +11,8 @@ from engine.allocator import PortfolioAllocator
 from engine.executioner import AlpacaExecutioner
 from engine.modes import ModeResolver
 from config import (SENTIMENT_MODE, MIN_FRACTIONAL_NOTIONAL_USD, ACTIVE_MODE,
-                    ALPACA_PAPER, TRADING_HALTED)
+                    ALPACA_PAPER, TRADING_HALTED,
+                    PROFILE_STALE_DAYS, PROFILE_STALE_WARNING_DAYS)
 from engine.sentiment import SentimentAnalyzer
 
 
@@ -67,6 +68,22 @@ def run_live_pipeline():
         f"mode: **{ACTIVE_MODE}** | account: **{account_kind}**"
     )
 
+    # Advance warning before profiles expire. Once a profile goes stale the
+    # controller skips that ticker entirely, and because the watchlist is
+    # optimized in one batch they all expire together — which reads as a totally
+    # silent run. Warn while there is still time to re-optimize.
+    expiring = expiring_profiles(profiles, PROFILE_STALE_DAYS, PROFILE_STALE_WARNING_DAYS)
+    if expiring:
+        soonest = expiring[0][1]
+        names = ", ".join(f"{ticker} ({days}d)" for ticker, days in expiring[:8])
+        more = f" +{len(expiring) - 8} more" if len(expiring) > 8 else ""
+        expiry_msg = (f"📅 **{len(expiring)} profile(s) expire within "
+                      f"{PROFILE_STALE_WARNING_DAYS} day(s)** (soonest: {soonest}d). "
+                      f"Stale profiles are SKIPPED — re-run the optimizer before then. "
+                      f"{names}{more}")
+        print(expiry_msg)
+        notifier.send_message(expiry_msg)
+
     # Announce the kill switch on EVERY run it is on. A silent freeze looks
     # identical to a quiet market, and that is how a halt gets left on for weeks.
     if TRADING_HALTED:
@@ -102,7 +119,7 @@ def run_live_pipeline():
     # 3. Orchestration loop
     for ticker, rules in profiles.items():
         try:
-            if is_stale(ticker):
+            if is_stale(ticker, PROFILE_STALE_DAYS):
                 msg = f"🔍 **{ticker}** | ⚠️ Stale profile. Skipping."
                 print(msg)
                 notifier.send_message(msg)

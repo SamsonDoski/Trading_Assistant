@@ -11,7 +11,7 @@ from engine.allocator import PortfolioAllocator
 from engine.executioner import AlpacaExecutioner
 from engine.modes import ModeResolver
 from config import (SENTIMENT_MODE, MIN_FRACTIONAL_NOTIONAL_USD, ACTIVE_MODE,
-                    ALPACA_PAPER)
+                    ALPACA_PAPER, TRADING_HALTED)
 from engine.sentiment import SentimentAnalyzer
 
 
@@ -30,7 +30,8 @@ def run_live_pipeline():
     """
     load_dotenv()
     account_kind = "PAPER" if ALPACA_PAPER else "LIVE"
-    print(f"⚙️ Initializing V5.0 Controller | mode: {ACTIVE_MODE} | account: {account_kind}")
+    print(f"⚙️ Initializing V5.0 Controller | mode: {ACTIVE_MODE} | "
+          f"account: {account_kind} | halted: {TRADING_HALTED}")
 
     # 1. Wire up the micro-modules
     notifier = DiscordNotifier()
@@ -65,6 +66,15 @@ def run_live_pipeline():
         f"{greeting}, Olajide. Running Trading Assistant Engine | "
         f"mode: **{ACTIVE_MODE}** | account: **{account_kind}**"
     )
+
+    # Announce the kill switch on EVERY run it is on. A silent freeze looks
+    # identical to a quiet market, and that is how a halt gets left on for weeks.
+    if TRADING_HALTED:
+        halt_msg = ("🛑 **KILL SWITCH ON** — no new positions will be opened this run. "
+                    "Sells, stop attachment and stop-out reporting still run normally. "
+                    "Set TRADING_HALTED=false to resume buying.")
+        print(halt_msg)
+        notifier.send_message(halt_msg)
 
     # Session budget: deployable buying power after the cash reserve, split
     # equally across watchlist names we don't already hold.
@@ -140,7 +150,13 @@ def run_live_pipeline():
                 else:
                     recovery_entry = True
 
-            if fresh_entry or recovery_entry:
+            if (fresh_entry or recovery_entry) and TRADING_HALTED:
+                # Checked BEFORE sentiment so a halted run spends no news/LLM
+                # calls on entries that cannot happen.
+                state_msg = ("🛑 BUY SUPPRESSED — kill switch is on "
+                             "(sells and stops still active).")
+
+            elif fresh_entry or recovery_entry:
                 entry_kind = "fresh crossover" if fresh_entry else "RSI-recovery re-entry"
 
                 report = None

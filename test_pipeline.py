@@ -156,6 +156,18 @@ class TestConfig:
         assert config.SHORT_MA < config.LONG_MA
         assert config.RESULTS_DIR
 
+    def test_kill_switch_defaults_off_and_needs_explicit_optin(self, monkeypatch):
+        # A missing or garbled variable must NEVER silently freeze trading.
+        import importlib
+        import config as cfg
+        for value, expected in (("true", True), ("TRUE", True), ("1", True),
+                                ("yes", True), ("on", True),
+                                ("false", False), ("", False), ("nonsense", False)):
+            monkeypatch.setenv("TRADING_HALTED", value)
+            assert importlib.reload(cfg).TRADING_HALTED is expected, value
+        monkeypatch.delenv("TRADING_HALTED", raising=False)
+        assert importlib.reload(cfg).TRADING_HALTED is False    # unset -> trading allowed
+
     def test_alpaca_paper_defaults_true_and_needs_explicit_optout(self, monkeypatch):
         # Going live must require an explicit "false" — never a missing/garbled var.
         import importlib
@@ -705,6 +717,48 @@ class TestControllerOrchestration:
             "current_price": 200.0, "current_rsi": 40.0}, held=False)
         lc.run_live_pipeline()
         assert h["exec"].buys == [("AAPL", 42)] and h["exec"].sells == []
+
+    def test_kill_switch_suppresses_buys(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False)
+        monkeypatch.setattr(lc, "TRADING_HALTED", True)
+        lc.run_live_pipeline()
+        assert h["exec"].buys == [] and h["exec"].notional_buys == []
+        sent = " ".join(h["notifier"].msgs)
+        assert "KILL SWITCH ON" in sent          # announced, never a silent freeze
+        assert "BUY SUPPRESSED" in sent
+
+    def test_kill_switch_still_sells_and_protects(self, monkeypatch):
+        # The whole point: halting must not disable the safety systems.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 0, "previous_signal": 1,
+            "current_price": 180.0, "current_rsi": 60.0}, held=True)
+        monkeypatch.setattr(lc, "TRADING_HALTED", True)
+        lc.run_live_pipeline()
+        assert h["exec"].sells == ["AAPL"]                 # trend-reversal exit still fires
+        assert h["exec"].stops == [("AAPL", 15.0)]         # stops still attached
+
+    def test_kill_switch_off_is_silent(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False)
+        monkeypatch.setattr(lc, "TRADING_HALTED", False)
+        lc.run_live_pipeline()
+        assert h["exec"].buys == [("AAPL", 42)]
+        assert "KILL SWITCH" not in " ".join(h["notifier"].msgs)
+
+    def test_kill_switch_skips_the_sentiment_call(self, monkeypatch):
+        # No news/LLM spend on entries that cannot happen.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False,
+            sentiment_mode="live")
+        called = {"n": 0}
+        class CountingSentiment:
+            def get_verdict(self, t, conviction_min=0.5, conviction_max=1.5):
+                called["n"] += 1
+                raise AssertionError("sentiment must not run while halted")
+        monkeypatch.setattr(lc, "SentimentAnalyzer", CountingSentiment)
+        monkeypatch.setattr(lc, "TRADING_HALTED", True)
+        lc.run_live_pipeline()
+        assert called["n"] == 0
 
     def test_sizing_uses_the_live_quote_not_the_daily_bar(self, monkeypatch):
         # Daily bar says $200, market says $250. Sizing must use $250.

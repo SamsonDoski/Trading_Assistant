@@ -45,7 +45,7 @@ jobs:
         # Add a function name here only AFTER creating it in AWS — a missing
         # function fails this step and blocks the whole deploy.
         env:
-          FUNCTIONS: "trading-assistant-live trading-assistant-live-secondary"
+          FUNCTIONS: "trading-assistant-live trading-assistant-live-secondary trading-assistant-live-fractional"
         run: |
           for function_name in $FUNCTIONS; do
             echo "Deploying to $function_name..."

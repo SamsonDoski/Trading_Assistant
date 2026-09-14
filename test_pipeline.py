@@ -511,7 +511,7 @@ class TestExecutioner:
         monkeypatch.setattr(em, "TradingClient",
                             self._client_cls({"AAPL": ("0.02", "0.5")},
                                              current_prices={"AAPL": "100.0"},
-                                             all_orders=[("AAPL", "fstop-AAPL-90.0000-1700000000")]))
+                                             all_orders=[("AAPL", "fstop-AAPL-90.0000-100.0000-1700000000")]))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
         ex.ensure_protective_stop("AAPL", 15.0)
         # prior protected 90 beats candidate (100*0.85=85) -> level holds at 90, never steps down
@@ -522,7 +522,7 @@ class TestExecutioner:
         monkeypatch.setattr(em, "TradingClient",
                             self._client_cls({"AAPL": ("-0.10", "0.5")},
                                              current_prices={"AAPL": "88.0"},
-                                             all_orders=[("AAPL", "fstop-AAPL-90.0000-1700000000")]))
+                                             all_orders=[("AAPL", "fstop-AAPL-90.0000-100.0000-1700000000")]))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
         msg = ex.ensure_protective_stop("AAPL", 15.0)
         # current 88 <= protected 90 -> sell now, place no new stop
@@ -598,16 +598,31 @@ class TestExecutioner:
         assert stop_level == pytest.approx(85.0)     # entry 100 * (1 - 0.15)
         assert entry_price == pytest.approx(100.0)   # avg_entry_price, for later P/L
 
-    def test_ratchet_still_reads_legacy_ids(self, monkeypatch):
+    def test_ratchet_ignores_legacy_ids_without_entry(self, monkeypatch):
         import engine.executioner as em
-        # A 4-part id from before entry-price tagging must still floor the ratchet.
+        # A 4-part id carries no entry price, so it can't be tied to this
+        # position — it must not floor the ratchet. Stop seeds from entry.
         monkeypatch.setattr(em, "TradingClient",
                             self._client_cls({"AAPL": ("0.02", "0.5")},
                                              current_prices={"AAPL": "100.0"},
                                              all_orders=[("AAPL", "fstop-AAPL-90.0000-1700000000")]))
         ex = em.AlpacaExecutioner("k", "s", paper=True)
         ex.ensure_protective_stop("AAPL", 15.0)
-        assert float(ex.api.submitted[0].stop_price) == pytest.approx(90.0)
+        assert float(ex.api.submitted[0].stop_price) == pytest.approx(85.0)
+
+    def test_reentry_does_not_inherit_previous_positions_stop(self, monkeypatch):
+        import engine.executioner as em
+        # Earlier position entered at 120 ratcheted its stop to 110. A new
+        # position entered at 100 must NOT see price 100 <= 110 and liquidate.
+        monkeypatch.setattr(em, "TradingClient",
+                            self._client_cls({"AAPL": ("0.00", "0.5")},
+                                             current_prices={"AAPL": "100.0"},
+                                             all_orders=[("AAPL", "fstop-AAPL-110.0000-120.0000-1700000000")]))
+        ex = em.AlpacaExecutioner("k", "s", paper=True)
+        msg = ex.ensure_protective_stop("AAPL", 15.0)
+        assert ex.api.closed == []
+        assert "liquidated" not in (msg or "").lower()
+        assert float(ex.api.submitted[0].stop_price) == pytest.approx(85.0)
 
     def test_position_fetch_failure_raises(self, monkeypatch):
         import engine.executioner as em

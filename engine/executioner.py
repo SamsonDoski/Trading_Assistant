@@ -201,7 +201,7 @@ class AlpacaExecutioner:
             current_price = entry_price  # field missing — fall back to entry
 
         seed_stop = entry_price * (1.0 - stop_fraction)
-        previous_stop = self._recover_protected_stop(ticker)
+        previous_stop = self._recover_protected_stop(ticker, entry_price)
         floor_stop = previous_stop if previous_stop is not None else seed_stop
         candidate_stop = current_price * (1.0 - stop_fraction)
         protected_stop_price = max(floor_stop, candidate_stop)
@@ -258,12 +258,18 @@ class AlpacaExecutioner:
                 entry_price = None
         return stop_level, entry_price
 
-    def _recover_protected_stop(self, ticker):
-        """Highest `protected_stop_price` previously committed for a fractional
+    def _recover_protected_stop(self, ticker, entry_price):
+        """Highest `protected_stop_price` previously committed for THIS fractional
         position, parsed from the client_order_id of past DAY stops (open or
         expired). Returns None if none found — caller then seeds from entry.
-        One order-history call per fractional name; fine at current scale, could
-        be batched into a single bulk fetch later if the watchlist grows."""
+
+        Only stops tagged with the current position's entry price count. Order
+        history outlives positions, so without this filter a re-entry inherits
+        the old position's higher stop and is liquidated on the spot. Legacy
+        4-part ids carry no entry price, can't be tied to a position, and are
+        ignored. One order-history call per fractional name; fine at current
+        scale, could be batched into a single bulk fetch later if the watchlist
+        grows."""
         try:
             req = GetOrdersRequest(status=QueryOrderStatus.ALL, symbols=[ticker], limit=50)
             orders = self.api.get_orders(filter=req)
@@ -272,12 +278,17 @@ class AlpacaExecutioner:
             return None
         best = None
         prefix = f"fstop-{ticker}-"
+        current_entry = round(float(entry_price), 4)   # ids store entry at 4 dp
         for o in orders:
             coid = str(getattr(o, "client_order_id", "") or "")
             if not coid.startswith(prefix):
                 continue
-            level, _ = self._parse_fractional_stop_id(coid)
-            if level is not None and (best is None or level > best):
+            level, tagged_entry = self._parse_fractional_stop_id(coid)
+            if level is None or tagged_entry is None:
+                continue
+            if round(tagged_entry, 4) != current_entry:
+                continue   # stop belonged to an earlier position in this ticker
+            if best is None or level > best:
                 best = level
         return best
 

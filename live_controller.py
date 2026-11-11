@@ -12,7 +12,8 @@ from engine.executioner import AlpacaExecutioner
 from engine.modes import ModeResolver
 from config import (SENTIMENT_MODE, MIN_FRACTIONAL_NOTIONAL_USD, ACTIVE_MODE,
                     ALPACA_PAPER, TRADING_HALTED,
-                    PROFILE_STALE_DAYS, PROFILE_STALE_WARNING_DAYS)
+                    PROFILE_STALE_DAYS, PROFILE_STALE_WARNING_DAYS,
+                    ALLOCATION_DENOMINATOR_CAP)
 from engine.sentiment import SentimentAnalyzer
 
 
@@ -44,6 +45,7 @@ def run_live_pipeline():
     allocator = PortfolioAllocator(
         cash_reserve_pct=portfolio.cash_reserve_pct,
         min_fractional_notional_usd=MIN_FRACTIONAL_NOTIONAL_USD,
+        denominator_cap=ALLOCATION_DENOMINATOR_CAP,
     )
 
     api_key = os.getenv("ALPACA_API_KEY")
@@ -100,9 +102,11 @@ def run_live_pipeline():
     remaining_budget_usd = usable_budget_usd
     not_held_count = sum(1 for t in profiles if not executioner.is_holding(t))
     base_allocation_usd = allocator.base_allocation(usable_budget_usd, not_held_count)
+    funded_count = allocator.funded_count(not_held_count)
     bp_msg = (f"💰 Buying power: ${buying_power:,.2f} | "
               f"deployable after {allocator.cash_reserve_pct:.0%} reserve: ${usable_budget_usd:,.2f} | "
-              f"{not_held_count} names open → base ${base_allocation_usd:,.2f}/position")
+              f"{not_held_count} names open, funding up to {funded_count} → "
+              f"base ${base_allocation_usd:,.2f}/position")
     print(bp_msg)
     notifier.send_message(bp_msg)
 

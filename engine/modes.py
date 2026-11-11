@@ -87,7 +87,7 @@ TRADING_MODES = {
     "Swing": ModeSettings(          # a real swing preset with its own grid — NOT V4.0
         name="Swing",
         ma_short=20, ma_long=50, rsi_window=14, rsi_buy_threshold=55,
-        allow_multi_entry=False,
+        allow_multi_entry=True,
         exit_on_trend_reversal=True, trailing_stop_percent=15.0,
         sell_on_overbought=False, rsi_sell_threshold=70,
         sentiment_enabled=True, conviction_min=0.5, conviction_max=1.5,
@@ -97,7 +97,7 @@ TRADING_MODES = {
     "Long_Term": ModeSettings(      # hold until the 50/200 trend reverses; no stops
         name="Long_Term",
         ma_short=50, ma_long=200, rsi_window=14, rsi_buy_threshold=40,
-        allow_multi_entry=False,
+        allow_multi_entry=True,
         exit_on_trend_reversal=True, trailing_stop_percent=None,
         sell_on_overbought=False, rsi_sell_threshold=70,
         sentiment_enabled=True, conviction_min=1.0, conviction_max=1.0,

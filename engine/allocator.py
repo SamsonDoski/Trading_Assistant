@@ -5,9 +5,11 @@ class PortfolioAllocator:
     """Sizing information-expert: turns dollars + conviction into a share count.
     Knows nothing about the broker — it deals only in prices and dollars."""
 
-    def __init__(self, cash_reserve_pct=0.15, min_fractional_notional_usd=1.00):
+    def __init__(self, cash_reserve_pct=0.15, min_fractional_notional_usd=1.00,
+                 denominator_cap=None):
         self.cash_reserve_pct = cash_reserve_pct
         self.min_fractional_notional_usd = min_fractional_notional_usd
+        self.denominator_cap = denominator_cap
         # Legacy V3.0 flat base — only used by generate_buy_orders below.
         self.flat_allocation_usd = 5000.00
 
@@ -18,17 +20,31 @@ class PortfolioAllocator:
             return 0.0
         return buying_power * (1.0 - self.cash_reserve_pct)
 
+    def funded_count(self, not_held_count):
+        """How many full-size positions this session's budget is split into.
+
+        Without a cap this is every not-held name, which sizes each entry for a
+        session where the whole watchlist fires at once. Public so the caller
+        can report the effective number without re-deriving the rule."""
+        if not_held_count is None or not_held_count <= 0:
+            return 0
+        if not self.denominator_cap:
+            return not_held_count
+        return min(not_held_count, self.denominator_cap)
+
     def base_allocation(self, usable_budget_usd, not_held_count):
         """Equal-weight dollar slice for ONE new position: deployable capital
-        split across every watchlist name not currently held. This is the
-        pre-conviction size; the sentiment multiplier scales it afterward.
-        No flat cap — auto-scales to any account size. Returns 0.0 when there
-        is nothing to deploy or every name is already held (guards /0)."""
+        split across every watchlist name not currently held, capped at
+        denominator_cap when one is set. This is the pre-conviction size; the
+        sentiment multiplier scales it afterward. No flat cap — auto-scales to
+        any account size. Returns 0.0 when there is nothing to deploy or every
+        name is already held (guards /0)."""
         if usable_budget_usd is None or usable_budget_usd <= 0:
             return 0.0
-        if not_held_count is None or not_held_count <= 0:
+        denominator = self.funded_count(not_held_count)
+        if denominator <= 0:
             return 0.0
-        return usable_budget_usd / not_held_count
+        return usable_budget_usd / denominator
 
     def position_budget(self, base_allocation_usd, remaining_budget_usd=None,
                         conviction_multiplier=1.0):

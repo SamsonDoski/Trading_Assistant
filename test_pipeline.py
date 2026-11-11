@@ -202,6 +202,27 @@ class TestAllocator:
         assert a.base_allocation(0, 20) == 0.0
         assert a.base_allocation(None, 20) == 0.0
 
+    def test_denominator_cap_concentrates_the_slice(self):
+        from engine.allocator import PortfolioAllocator
+        capped = PortfolioAllocator(denominator_cap=4)
+        # 20 names not held, but the budget is split 4 ways -> $21,250 each
+        assert capped.funded_count(20) == 4
+        assert capped.base_allocation(85_000, 20) == pytest.approx(21_250)
+        # Fewer not-held names than the cap: the real count still wins, so the
+        # cap can only ever concentrate, never dilute.
+        assert capped.funded_count(3) == 3
+        assert capped.base_allocation(85_000, 3) == pytest.approx(85_000 / 3)
+        # Guards survive the cap.
+        assert capped.funded_count(0) == 0
+        assert capped.funded_count(None) == 0
+        assert capped.base_allocation(85_000, 0) == 0.0
+
+    def test_no_cap_is_the_uncapped_divisor(self):
+        from engine.allocator import PortfolioAllocator
+        for allocator in (PortfolioAllocator(), PortfolioAllocator(denominator_cap=None)):
+            assert allocator.funded_count(20) == 20
+            assert allocator.base_allocation(85_000, 20) == pytest.approx(4_250)
+
     def test_calculate_shares_whole(self):
         from engine.allocator import PortfolioAllocator
         a = PortfolioAllocator()
@@ -657,6 +678,7 @@ class TestControllerOrchestration:
             cash_reserve_pct = 0.15
             def __init__(self, *a, **k): pass
             def usable_budget(self, bp): return bp
+            def funded_count(self, not_held_count): return max(0, not_held_count)
             def base_allocation(self, usable_budget_usd, not_held_count):
                 return usable_budget_usd / max(1, not_held_count)
             def position_budget(self, base_allocation_usd, remaining_budget_usd=None,
@@ -1314,6 +1336,25 @@ class TestTradingModes:
         # best_windows['V4_Legacy'] and shadow the legacy flat windows.
         from engine.modes import MODE_GRIDS
         assert "V4_Legacy" not in MODE_GRIDS
+
+    def test_every_preset_mode_can_re_enter_while_flat(self):
+        # A trailing stop can end a position without ending the TREND. Single
+        # entry then locked the mode out for the rest of that trend (MU sat out
+        # a 32% run that way). Every preset may now re-enter while FLAT, each at
+        # its own RSI gate; re-entry never adds to an open position.
+        from engine.modes import TRADING_MODES
+        for name in ("Aggressive", "Swing", "Long_Term", "Volatile"):
+            assert TRADING_MODES[name].allow_multi_entry is True, name
+        # The rollback anchor must NOT change behavior.
+        assert TRADING_MODES["V4_Legacy"].allow_multi_entry is False
+
+    def test_re_entry_gate_is_per_mode(self):
+        # Long_Term re-enters only on a deep dip; the looser modes much sooner.
+        from engine.modes import TRADING_MODES
+        assert TRADING_MODES["Long_Term"].rsi_buy_threshold == 40
+        assert TRADING_MODES["Volatile"].rsi_buy_threshold == 45
+        assert TRADING_MODES["Swing"].rsi_buy_threshold == 55
+        assert TRADING_MODES["Aggressive"].rsi_buy_threshold == 55
 
     def test_long_term_holds_with_no_stop(self):
         from engine.modes import TRADING_MODES

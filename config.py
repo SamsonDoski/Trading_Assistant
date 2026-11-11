@@ -57,6 +57,14 @@ CASH_RESERVE_PCT = 0.15   # fraction of buying power always held back as cash
 # Skip a fractional buy whose dollar size is below this — avoids buying dust.
 MIN_FRACTIONAL_NOTIONAL_USD = 1.00
 
+# Cap on the denominator the session budget is divided across. Uncapped, the
+# divisor is "every watchlist name not currently held" — 21 of 24 on a typical
+# day — so each entry is sized for a session where everything fires at once.
+# That session does not occur: measured over 2024-2026, at most 4 names signalled
+# on the same day and the average was 1.3, so the bulk of the account sat in cash
+# permanently. Set to None to restore the uncapped divisor.
+ALLOCATION_DENOMINATOR_CAP = 4
+
 # -----------------
 # Profile Freshness
 # -----------------

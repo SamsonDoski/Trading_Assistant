@@ -66,6 +66,23 @@ MIN_FRACTIONAL_NOTIONAL_USD = 1.00
 ALLOCATION_DENOMINATOR_CAP = 4
 
 # -----------------
+# Account Baseline (reporting only)
+# -----------------
+# Total P&L needs a starting point and Alpaca exposes no "money I deposited"
+# figure — only current equity. Set this per function to the capital actually
+# funded into THAT account and the run header reports lifetime P&L; leave it
+# unset and the header reports equity plus the day's change only, rather than
+# inventing a baseline. Read from the environment because the three parallel
+# accounts are funded differently. REPORTING ONLY: never touches sizing.
+_baseline_raw = os.getenv("ACCOUNT_BASELINE_USD", "").strip()
+try:
+    ACCOUNT_BASELINE_USD = float(_baseline_raw) if _baseline_raw else None
+except ValueError:
+    print(f"⚠️ ACCOUNT_BASELINE_USD is not a number ({_baseline_raw!r}) — "
+          f"reporting equity without lifetime P&L.")
+    ACCOUNT_BASELINE_USD = None
+
+# -----------------
 # Profile Freshness
 # -----------------
 # Profiles older than PROFILE_STALE_DAYS are skipped entirely by the controller.

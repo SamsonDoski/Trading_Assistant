@@ -667,7 +667,7 @@ class TestExecutioner:
 class TestControllerOrchestration:
     def _wire(self, monkeypatch, signals, held, buying_power=1_000_000.0,
               sentiment_report=None, sentiment_mode="shadow", mode="V4_Legacy",
-              live_price=None):
+              live_price=None, baseline=None, snapshot_ok=True):
         import live_controller as lc
         class FakeScanner:
             def get_signals(self, *a, **k):
@@ -718,6 +718,19 @@ class TestControllerOrchestration:
             def is_holding(self, t): return held
             def get_unrealized_pl_pct(self, t): return 3.0
             def get_buying_power(self): return buying_power
+            def get_account_snapshot(self, baseline_usd=None):
+                if not snapshot_ok:
+                    return None        # a reporting failure must not stop the run
+                snap = {"equity": 120_000.0, "cash": 50_000.0,
+                        "long_market_value": 70_000.0,
+                        "open_unrealized_usd": 2_500.0,
+                        "day_change_usd": 500.0, "day_change_pct": 0.42,
+                        "baseline_usd": baseline_usd,
+                        "total_pl_usd": None, "total_pl_pct": None}
+                if baseline_usd:
+                    snap["total_pl_usd"] = 120_000.0 - baseline_usd
+                    snap["total_pl_pct"] = (120_000.0 / baseline_usd - 1.0) * 100
+                return snap
             def fractionable(self, t): return True
             def execute_market_buy(self, t, qty=None, notional=None):
                 if notional is not None:
@@ -740,6 +753,7 @@ class TestControllerOrchestration:
         monkeypatch.setattr(lc, "DiscordNotifier", FakeNotifier)
         monkeypatch.setattr(lc.time, "sleep", lambda *a, **k: None)
         monkeypatch.setattr(lc, "ACTIVE_MODE", mode)
+        monkeypatch.setattr(lc, "ACCOUNT_BASELINE_USD", baseline)
         # None => quote unavailable, controller falls back to the daily-bar price.
         monkeypatch.setattr(lc, "fetch_latest_price", lambda t: live_price)
         def make_exec(*a, **k):
@@ -754,6 +768,47 @@ class TestControllerOrchestration:
             "current_price": 200.0, "current_rsi": 40.0}, held=False)
         lc.run_live_pipeline()
         assert h["exec"].buys == [("AAPL", 42)] and h["exec"].sells == []
+
+    def test_run_header_reports_equity_and_open_pl(self, monkeypatch):
+        # Buying power says what can be SPENT; equity says how the account is
+        # DOING. With most of the book in cash those two barely move together,
+        # so the header has to carry both.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False)
+        lc.run_live_pipeline()
+        sent = " ".join(h["notifier"].msgs)
+        assert "Equity: $120,000.00" in sent
+        assert "open P/L: +$2,500.00" in sent
+        assert "since prior close: +$500.00" in sent
+
+    def test_run_header_reports_total_pl_when_baseline_is_set(self, monkeypatch):
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False,
+            baseline=100_000.0)
+        lc.run_live_pipeline()
+        sent = " ".join(h["notifier"].msgs)
+        assert "total on $100,000 funded: +$20,000.00 (+20.00%)" in sent
+
+    def test_run_header_says_how_to_enable_total_pl(self, monkeypatch):
+        # Alpaca exposes no deposit figure, so lifetime P/L is unanswerable
+        # without a baseline. Say so rather than inventing a starting balance.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
+            "current_price": 200.0, "current_rsi": 40.0}, held=False, baseline=None)
+        lc.run_live_pipeline()
+        sent = " ".join(h["notifier"].msgs)
+        assert "set ACCOUNT_BASELINE_USD" in sent
+        assert "total on $" not in sent
+
+    def test_header_failure_does_not_stop_trading(self, monkeypatch):
+        # The header is reporting only. If the snapshot fails, exits and stop
+        # management must still run.
+        lc, h = self._wire(monkeypatch, {"latest_signal": 0, "previous_signal": 1,
+            "current_price": 180.0, "current_rsi": 60.0}, held=True,
+            snapshot_ok=False)
+        lc.run_live_pipeline()
+        assert h["exec"].sells == ["AAPL"]
+        assert h["exec"].stops == [("AAPL", 15.0)]
+        assert "Equity:" not in " ".join(h["notifier"].msgs)
 
     def test_kill_switch_suppresses_buys(self, monkeypatch):
         lc, h = self._wire(monkeypatch, {"latest_signal": 1, "previous_signal": 0,
@@ -1210,6 +1265,27 @@ class TestSentiment:
         assert self._analyzer(headlines=["H"], verdict=wild).get_verdict("N").sentiment_multiplier == 1.5
         low = SentimentVerdict(sentiment_multiplier=0.1, veto=False, rationale="doom")
         assert self._analyzer(headlines=["H"], verdict=low).get_verdict("N").sentiment_multiplier == 0.5
+
+    def test_clamped_verdict_reports_what_the_model_actually_said(self, capsys):
+        # Long_Term pins the band to 1.0/1.0, so a bearish call was silently
+        # rewritten to x1.00 and became indistinguishable in the log from
+        # genuine neutrality. The raw score has to survive into the log line.
+        from engine.sentiment import SentimentVerdict
+        bearish = SentimentVerdict(sentiment_multiplier=0.6, veto=False,
+                                   rationale="leadership exit, cut the position")
+        report = self._analyzer(headlines=["CEO resigns"], verdict=bearish).get_verdict(
+            "NVDA", conviction_min=1.0, conviction_max=1.0)
+        assert report.sentiment_multiplier == pytest.approx(1.0)   # applied value
+        out = capsys.readouterr().out
+        assert "model said x0.60" in out
+        assert "clamped to the 1.00-1.00 band" in out
+
+    def test_unclamped_verdict_logs_no_clamp_note(self, capsys):
+        from engine.sentiment import SentimentVerdict
+        fine = SentimentVerdict(sentiment_multiplier=0.8, veto=False, rationale="soft")
+        self._analyzer(headlines=["H"], verdict=fine).get_verdict("AAPL")
+        out = capsys.readouterr().out
+        assert "x0.80" in out and "clamped" not in out
 
     def test_veto_passes_through(self):
         from engine.sentiment import SentimentVerdict

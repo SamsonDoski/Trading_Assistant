@@ -13,7 +13,7 @@ from engine.modes import ModeResolver
 from config import (SENTIMENT_MODE, MIN_FRACTIONAL_NOTIONAL_USD, ACTIVE_MODE,
                     ALPACA_PAPER, TRADING_HALTED,
                     PROFILE_STALE_DAYS, PROFILE_STALE_WARNING_DAYS,
-                    ALLOCATION_DENOMINATOR_CAP)
+                    ALLOCATION_DENOMINATOR_CAP, ACCOUNT_BASELINE_USD)
 from engine.sentiment import SentimentAnalyzer
 
 
@@ -109,6 +109,31 @@ def run_live_pipeline():
               f"base ${base_allocation_usd:,.2f}/position")
     print(bp_msg)
     notifier.send_message(bp_msg)
+
+    # Account header. The buying-power line above says what can be SPENT, which
+    # is not how the account is DOING — with most of the book in cash those two
+    # numbers barely move together. Reporting only; a failure here returns None
+    # and is skipped rather than interrupting stop management.
+    snapshot = executioner.get_account_snapshot(baseline_usd=ACCOUNT_BASELINE_USD)
+    if snapshot:
+        def signed(amount):
+            """+$500.00 / -$500.00 — the sign belongs before the currency, and
+            an f-string's :+ puts it after the literal '$'."""
+            return f"{'+' if amount >= 0 else '-'}${abs(amount):,.2f}"
+
+        eq_msg = f"📊 Equity: ${snapshot['equity']:,.2f}"
+        if snapshot["day_change_usd"] is not None:
+            eq_msg += (f" | since prior close: {signed(snapshot['day_change_usd'])} "
+                       f"({snapshot['day_change_pct']:+.2f}%)")
+        eq_msg += f" | open P/L: {signed(snapshot['open_unrealized_usd'])}"
+        if snapshot["total_pl_usd"] is not None:
+            eq_msg += (f" | total on ${snapshot['baseline_usd']:,.0f} funded: "
+                       f"{signed(snapshot['total_pl_usd'])} "
+                       f"({snapshot['total_pl_pct']:+.2f}%)")
+        else:
+            eq_msg += " | total P/L: set ACCOUNT_BASELINE_USD to report it"
+        print(eq_msg)
+        notifier.send_message(eq_msg)
 
     # Report any positions the broker stopped out while we were asleep.
     for symbol, qty, fill_price, pl_pct, pl_usd in executioner.get_recent_stopouts(hours=24):

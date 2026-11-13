@@ -72,6 +72,67 @@ class AlpacaExecutioner:
             print(f"❌ Failed to fetch buying power: {e}")
             return 0.0
 
+    def get_account_snapshot(self, baseline_usd=None):
+        """Equity, the day's move, and open-position P/L, for the run header.
+
+        REPORTING ONLY — nothing here feeds sizing or orders, so it returns None
+        on any failure rather than raising: a broken status line must never stop
+        the bot managing stops and exits.
+
+        `baseline_usd` is the capital actually funded into THIS account. Alpaca
+        exposes no "money I deposited" figure, only current equity, so lifetime
+        P&L is unanswerable without it and the total fields stay None rather than
+        being invented from a guessed starting balance.
+
+        Day change uses Alpaca's `last_equity`, which is equity at the PREVIOUS
+        session's close — so on the first run of a day it is the overnight move,
+        and intraday it is the move since yesterday's close, not since this run.
+        """
+        try:
+            account = self.api.get_account()
+        except Exception as e:
+            print(f"⚠️ Could not fetch account snapshot: {e}")
+            return None
+
+        def number(attr):
+            try:
+                value = getattr(account, attr, None)
+                return None if value is None else float(value)
+            except (TypeError, ValueError):
+                return None
+
+        equity = number("equity")
+        if equity is None:
+            print("⚠️ Account snapshot has no equity figure; skipping the header.")
+            return None
+        last_equity = number("last_equity")
+
+        unrealized = 0.0
+        for position in self._positions.values():
+            try:
+                unrealized += float(position.unrealized_pl)
+            except (TypeError, ValueError, AttributeError):
+                continue      # one unreadable position must not void the total
+
+        snapshot = {
+            "equity": equity,
+            "cash": number("cash"),
+            "long_market_value": number("long_market_value"),
+            "open_unrealized_usd": unrealized,
+            "day_change_usd": None,
+            "day_change_pct": None,
+            "baseline_usd": baseline_usd,
+            "total_pl_usd": None,
+            "total_pl_pct": None,
+        }
+        if last_equity:
+            snapshot["day_change_usd"] = equity - last_equity
+            snapshot["day_change_pct"] = (equity / last_equity - 1.0) * 100
+        if baseline_usd:
+            snapshot["total_pl_usd"] = equity - baseline_usd
+            snapshot["total_pl_pct"] = (equity / baseline_usd - 1.0) * 100
+        return snapshot
+
     def fractionable(self, ticker):
         """True if Alpaca allows fractional-share orders on this symbol. Cached
         per run. Defaults to False on lookup failure so we never fire a

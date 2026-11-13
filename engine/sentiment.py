@@ -158,16 +158,24 @@ class SentimentAnalyzer:
                 output_format=SentimentVerdict,
             )
             verdict = response.parsed_output
+            raw_multiplier = float(verdict.sentiment_multiplier)
             report = SentimentReport(
                 # Clamp defensively — the schema asks for 0.5-1.5 but we enforce it.
                 sentiment_multiplier=max(
-                    conviction_min, min(conviction_max, verdict.sentiment_multiplier)
+                    conviction_min, min(conviction_max, raw_multiplier)
                 ),
                 veto=verdict.veto,
                 rationale=verdict.rationale,
                 headlines=headlines,
             )
-            print(f"📰 {ticker}: x{report.sentiment_multiplier:.2f} "
+            # Report the clamp when it bit. Modes with a pinned band (Long_Term
+            # is 1.0/1.0) silently discarded the model's actual call, so a log
+            # line reading "x1.00" was indistinguishable from genuine neutrality.
+            clamped = ""
+            if abs(report.sentiment_multiplier - raw_multiplier) > 1e-9:
+                clamped = (f" (model said x{raw_multiplier:.2f}, clamped to the "
+                           f"{conviction_min:.2f}-{conviction_max:.2f} band)")
+            print(f"📰 {ticker}: x{report.sentiment_multiplier:.2f}{clamped} "
                   f"veto={report.veto} — {report.rationale}")
             return report
         except Exception as e:
